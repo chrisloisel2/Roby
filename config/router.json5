@@ -1,0 +1,7 @@
+{
+  // Zenoh router, runs on the OPERATOR PC (zenohd -c config/router.json5).
+  mode: "router",
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"],
+  },
+}

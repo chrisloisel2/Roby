@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Roby · Téléopération</title>
+  <style>
+    :root {
+      --plane:      #0d0d0d;
+      --surface:    #1a1a19;
+      --surface-2:  #232321;
+      --ink:        #ffffff;
+      --ink-2:      #c3c2b7;
+      --muted:      #898781;
+      --hairline:   rgba(255,255,255,0.10);
+      --hairline-2: rgba(255,255,255,0.06);
+      --accent:     #3987e5;
+      --good:       #0ca30c;
+      --warning:    #fab219;
+      --critical:   #d03b3b;
+      --vx:         #3987e5;  /* avant/arrière */
+      --vy:         #199e70;  /* latéral */
+      --wz:         #9085e9;  /* rotation */
+      --radius:     12px;
+      --gap:        14px;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--plane); color: var(--ink);
+      -webkit-font-smoothing: antialiased; overflow: hidden;
+    }
+    .app {
+      display: grid; height: 100vh;
+      grid-template-rows: auto 1fr;
+    }
+
+    /* ---------- Header ---------- */
+    header {
+      display: flex; align-items: center; gap: 16px;
+      padding: 12px 18px; border-bottom: 1px solid var(--hairline);
+      background: var(--surface);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: .2px; }
+    .brand .dot {
+      width: 10px; height: 10px; border-radius: 50%; background: var(--good);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent);
+    }
+    .brand small { color: var(--muted); font-weight: 500; }
+    .header-spacer { flex: 1; }
+    .conn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline);
+      background: var(--surface-2); font-size: 13px; color: var(--ink-2);
+      font-variant-numeric: tabular-nums;
+    }
+    .conn .led { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .conn.live .led { background: var(--good); box-shadow: 0 0 8px var(--good); }
+    .conn.down .led { background: var(--critical); }
+    .clock { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+    /* ---------- Main grid ---------- */
+    main {
+      display: grid; gap: var(--gap); padding: var(--gap);
+      grid-template-columns: minmax(0, 1fr) 340px;
+      grid-template-rows: minmax(0, 1fr) auto;
+      grid-template-areas: "video side" "tele side";
+      min-height: 0;
+    }
+    .panel {
+      background: var(--surface); border: 1px solid var(--hairline);
+      border-radius: var(--radius); min-height: 0;
+    }
+    .panel-title {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--muted); padding: 12px 14px 0;
+    }
+
+    /* ---------- Video ---------- */
+    .video { grid-area: video; position: relative; overflow: hidden; background: #000; }
+    .video img {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; display: block;
+    }
+    .video .chips { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: 8px; font-size: 12px;
+      background: #000a; backdrop-filter: blur(4px); color: var(--ink-2);
+      font-variant-numeric: tabular-nums; border: 1px solid var(--hairline-2);
+    }
+    .chip b { color: var(--ink); font-weight: 600; }
+    .rec { position: absolute; top: 12px; right: 12px; display:flex; align-items:center; gap:6px;
+           font-size:12px; color: var(--ink-2); background:#000a; padding:5px 10px; border-radius:8px; }
+    .rec .dot { width:8px; height:8px; border-radius:50%; background: var(--critical); animation: pulse 1.4s infinite; }
+    .noSignal {
+      position: absolute; inset: 0; display: none; flex-direction: column;
+      align-items: center; justify-content: center; gap: 10px;
+      color: var(--muted); background: repeating-linear-gradient(45deg,#0e0e0e,#0e0e0e 12px,#111 12px,#111 24px);
+    }
+    .noSignal.show { display: flex; }
+    .noSignal .big { font-size: 15px; letter-spacing: .18em; color: var(--ink-2); }
+    .noSignal .sub { font-size: 12px; }
+
+    /* ---------- Telemetry ---------- */
+    .tele { grid-area: tele; padding-bottom: 14px; }
+    .meters { display: grid; gap: 12px; padding: 10px 16px 4px; }
+    .meter { display: grid; grid-template-columns: 92px 1fr 64px; align-items: center; gap: 12px; }
+    .meter .lbl { font-size: 13px; color: var(--ink-2); }
+    .meter .lbl small { display:block; color: var(--muted); font-size: 11px; }
+    .track {
+      position: relative; height: 10px; border-radius: 6px;
+      background: var(--surface-2); overflow: hidden;
+    }
+    .track::before { /* center baseline */
+      content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
+      background: var(--hairline); transform: translateX(-1px);
+    }
+    .track .fill {
+      position: absolute; top: 0; bottom: 0; border-radius: 6px;
+      transition: width .05s linear, left .05s linear;
+    }
+    .meter .val { text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+    /* ---------- Side column ---------- */
+    .side { grid-area: side; display: grid; grid-template-rows: auto auto 1fr; gap: var(--gap); min-height: 0; }
+    .side > .panel { display: flex; flex-direction: column; }
+
+    /* Safety */
+    .safety { padding: 14px; display: grid; gap: 12px; }
+    .estop {
+      appearance: none; border: none; cursor: pointer; width: 100%;
+      padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 750; letter-spacing: .12em;
+      color: #fff; background: var(--critical);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--critical) 22%, transparent), inset 0 -3px 0 #0004;
+      transition: transform .05s;
+    }
+    .estop:active { transform: translateY(1px); }
+    .deadman {
+      appearance: none; cursor: pointer; width: 100%; padding: 13px; border-radius: 10px;
+      font-size: 14px; font-weight: 650; letter-spacing: .06em; user-select: none;
+      color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--hairline);
+      transition: all .08s;
+    }
+    .deadman.armed { color: #06210a; background: var(--good); border-color: transparent;
+                     box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent); }
+    .deadman small { display:block; font-weight:500; font-size:11px; opacity:.8; margin-top:2px; }
+
+    /* State tiles */
+    .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 14px 14px; }
+    .tile {
+      border: 1px solid var(--hairline); border-radius: 10px; padding: 11px 12px;
+      background: var(--surface-2); display: grid; gap: 4px;
+    }
+    .tile .k { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+    .tile .v { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 650; }
+    .tile .v .ic { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+    .tile[data-s="good"]     .v .ic { background: var(--good); box-shadow: 0 0 7px var(--good); }
+    .tile[data-s="good"]     .v { color: #7fe07f; }
+    .tile[data-s="warning"]  .v .ic { background: var(--warning); }
+    .tile[data-s="warning"]  .v { color: var(--warning); }
+    .tile[data-s="critical"] .v .ic { background: var(--critical); }
+    .tile[data-s="critical"] .v { color: #f08b8b; }
+
+    /* Controls */
+    .controls { padding: 14px; display: grid; gap: 14px; overflow: auto; }
+    .dpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 220px; margin: 0 auto; }
+    .dpad button {
+      appearance: none; border: 1px solid var(--hairline); background: var(--surface-2);
+      color: var(--ink-2); border-radius: 10px; height: 46px; font-size: 18px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; user-select: none;
+      transition: all .06s;
+    }
+    .dpad button:active, .dpad button.on { background: var(--accent); color: #fff; border-color: transparent; }
+    .dpad .empty { visibility: hidden; }
+    .dpad small { font-size: 9px; }
+    .row { display: grid; gap: 6px; }
+    .row label { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+    .row label b { color: var(--ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+    input[type=range] { width: 100%; accent-color: var(--accent); }
+    .hints { font-size: 11px; color: var(--muted); line-height: 1.7; }
+    .kbd { display:inline-block; padding: 1px 6px; border:1px solid var(--hairline); border-radius:5px;
+           background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-family: ui-monospace, monospace; }
+
+    /* E-stop banner */
+    .banner {
+      display: none; position: fixed; inset: 0 0 auto 0; z-index: 20;
+      padding: 12px; text-align: center; font-weight: 700; letter-spacing: .1em;
+      color: #fff; background: var(--critical); animation: pulse 1.2s infinite;
+    }
+    .banner.show { display: block; }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+      .app { height: auto; }
+      main {
+        grid-template-columns: 1fr; grid-template-rows: none;
+        grid-template-areas: "video" "side" "tele"; height: auto;
+      }
+      .video { aspect-ratio: 4 / 3; }
+      .side { grid-template-rows: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="banner" id="banner">⚠ ARRÊT D'URGENCE ACTIF — redémarrer robot_agent.py pour réarmer</div>
+
+  <div class="app">
+    <header>
+      <div class="brand"><span class="dot" id="brandDot"></span>Roby <small>· Téléopération</small></div>
+      <div class="header-spacer"></div>
+      <span class="conn" id="conn"><span class="led"></span><span id="connText">connexion…</span></span>
+      <span class="clock" id="clock">--:--:--</span>
+    </header>
+
+    <main>
+      <!-- Video -->
+      <section class="panel video" aria-label="Caméra">
+        <img id="cam" alt="Flux caméra robot">
+        <div class="chips">
+          <span class="chip"><span>FPS</span><b id="fps">–</b></span>
+          <span class="chip"><span>latence</span><b id="age">–</b></span>
+          <span class="chip"><span>caméra avant</span></span>
+        </div>
+        <div class="rec"><span class="dot"></span>LIVE</div>
+        <div class="noSignal show" id="noSignal">
+          <div class="big">AUCUN SIGNAL</div>
+          <div class="sub">en attente du flux caméra du robot…</div>
+        </div>
+      </section>
+
+      <!-- Side column -->
+      <div class="side">
+        <!-- Safety -->
+        <section class="panel">
+          <div class="panel-title">Sécurité</div>
+          <div class="safety">
+            <button class="estop" id="estop">⛔ ARRÊT D'URGENCE</button>
+            <button class="deadman" id="deadman">HOMME-MORT — MAINTENIR
+              <small>maintenir <span class="kbd">Espace</span> ou ce bouton pour autoriser le mouvement</small>
+            </button>
+          </div>
+          <div class="panel-title">État</div>
+          <div class="tiles">
+            <div class="tile" id="t-robot"  data-s="critical"><div class="k">Robot</div><div class="v"><span class="ic"></span><span>—</span></div></div>
+            <div class="tile" id="t-cam"    data-s="critical"><div class="k">Caméra</div><div class="v"><span class="ic"></span><span>—</span></div></div>
+            <div class="tile" id="t-dead"   data-s="warning"><div class="k">Homme-mort</div><div class="v"><span class="ic"></span><span>—</span></div></div>
+            <div class="tile" id="t-move"   data-s="warning"><div class="k">Mouvement</div><div class="v"><span class="ic"></span><span>—</span></div></div>
+          </div>
+        </section>
+
+        <!-- Controls -->
+        <section class="panel">
+          <div class="panel-title">Contrôles</div>
+          <div class="controls">
+            <div class="dpad">
+              <button class="empty"></button>
+              <button data-k="fwd">↑<small>W</small></button>
+              <button class="empty"></button>
+              <button data-k="rotL">↺<small>A</small></button>
+              <button data-k="back">↓<small>S</small></button>
+              <button data-k="rotR">↻<small>D</small></button>
+              <button data-k="left">⇦<small>Q</small></button>
+              <button class="empty"></button>
+              <button data-k="right">⇨<small>E</small></button>
+            </div>
+            <div class="row">
+              <label>Vitesse max <b id="spdVal">60 %</b></label>
+              <input type="range" id="spd" min="10" max="100" value="60">
+            </div>
+            <div class="row">
+              <label>Pince <b id="gripVal">ouverte</b></label>
+              <input type="range" id="grip" min="0" max="100" value="0">
+            </div>
+            <div class="hints">
+              <span class="kbd">W</span>/<span class="kbd">S</span> avant·arrière ·
+              <span class="kbd">A</span>/<span class="kbd">D</span> rotation ·
+              <span class="kbd">Q</span>/<span class="kbd">E</span> latéral ·
+              <span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Telemetry -->
+      <section class="panel tele">
+        <div class="panel-title">Télémétrie — commande base (normalisée)</div>
+        <div class="meters">
+          <div class="meter"><div class="lbl">vx<small>avant / arrière</small></div>
+            <div class="track"><div class="fill" id="m-vx" style="background:var(--vx)"></div></div>
+            <div class="val" id="v-vx">+0.00</div></div>
+          <div class="meter"><div class="lbl">vy<small>latéral</small></div>
+            <div class="track"><div class="fill" id="m-vy" style="background:var(--vy)"></div></div>
+            <div class="val" id="v-vy">+0.00</div></div>
+          <div class="meter"><div class="lbl">wz<small>rotation</small></div>
+            <div class="track"><div class="fill" id="m-wz" style="background:var(--wz)"></div></div>
+            <div class="val" id="v-wz">+0.00</div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+  (() => {
+    const $ = (id) => document.getElementById(id);
+    const host = location.host;
+
+    // ---- Auto-reconnecting WebSocket helper ----
+    function ws(path, onmsg, onopen) {
+      let sock, alive = false;
+      const connect = () => {
+        sock = new WebSocket(`ws://${host}${path}`);
+        sock.onopen = () => { alive = true; onopen && onopen(sock); };
+        sock.onmessage = onmsg;
+        sock.onclose = () => { alive = false; setTimeout(connect, 800); };
+        sock.onerror = () => sock.close();
+      };
+      connect();
+      return { send: (o) => { if (alive) sock.send(JSON.stringify(o)); }, isAlive: () => alive };
+    }
+
+    // ---- Camera ----
+    const cam = $("cam"), noSignal = $("noSignal");
+    let lastFrame = 0, frameStamps = [];
+    const camSock = ws("/ws/camera", (e) => {
+      cam.src = "data:image/jpeg;base64," + e.data;
+      const now = performance.now();
+      lastFrame = now; frameStamps.push(now);
+      if (frameStamps.length > 30) frameStamps.shift();
+    });
+
+    // ---- Status (robot heartbeat + reported state) ----
+    let robotState = {};
+    const setTile = (id, status, text) => {
+      const t = $(id); t.dataset.s = status;
+      t.querySelector(".v span:last-child").textContent = text;
+    };
+    const statusSock = ws("/ws/status", (e) => {
+      const s = JSON.parse(e.data);
+      robotState = s.state || {};
+      setTile("t-robot", s.robot ? "good" : "critical", s.robot ? "ACTIF" : "PERDU");
+      $("brandDot").style.background = s.robot ? "var(--good)" : "var(--critical)";
+      const estop = !!robotState.estop;
+      $("banner").classList.toggle("show", estop);
+      setTile("t-move",
+        estop ? "critical" : (robotState.moving ? "good" : "warning"),
+        estop ? "E-STOP" : (robotState.moving ? "EN MOUVEMENT" : "ARRÊT"));
+    });
+
+    // ---- Connection badge (server link) ----
+    setInterval(() => {
+      const up = camSock.isAlive() || statusSock.isAlive() || ctrlSock.isAlive();
+      const c = $("conn");
+      c.className = "conn " + (up ? "live" : "down");
+      $("connText").textContent = up ? "serveur connecté" : "reconnexion…";
+    }, 500);
+
+    // ---- Clock + camera freshness (client-side) ----
+    setInterval(() => {
+      $("clock").textContent = new Date().toLocaleTimeString("fr-FR");
+      const now = performance.now();
+      const age = lastFrame ? now - lastFrame : Infinity;
+      const lost = age > 1000;
+      noSignal.classList.toggle("show", lost);
+      setTile("t-cam", lost ? "critical" : "good", lost ? "PERDUE" : "OK");
+      $("age").textContent = lost ? "—" : Math.round(age) + " ms";
+      // fps over the retained window
+      if (frameStamps.length > 1 && !lost) {
+        const span = (frameStamps[frameStamps.length - 1] - frameStamps[0]) / 1000;
+        $("fps").textContent = span > 0 ? (frameStamps.length - 1) / span < 1
+          ? "<1" : Math.round((frameStamps.length - 1) / span) : "–";
+      } else $("fps").textContent = "–";
+    }, 250);
+
+    // ================= CONTROL =================
+    const ctrlSock = ws("/ws/control", () => {});
+
+    const keys = { fwd:0, back:0, left:0, right:0, rotL:0, rotR:0 };
+    let deadman = false, speed = 0.60, gripper = 0.0;
+
+    const KEYMAP = { w:"fwd", s:"back", q:"left", e:"right", a:"rotL", d:"rotR",
+                     arrowup:"fwd", arrowdown:"back", arrowleft:"rotL", arrowright:"rotR" };
+
+    const setDeadman = (v) => {
+      deadman = v;
+      $("deadman").classList.toggle("armed", v);
+    };
+
+    document.addEventListener("keydown", (ev) => {
+      const k = ev.key.toLowerCase();
+      if (k === " ") { ev.preventDefault(); setDeadman(true); return; }
+      if (k === "x") { triggerStop(); return; }
+      if (KEYMAP[k]) { ev.preventDefault(); keys[KEYMAP[k]] = 1; highlight(KEYMAP[k], true); }
+    });
+    document.addEventListener("keyup", (ev) => {
+      const k = ev.key.toLowerCase();
+      if (k === " ") { setDeadman(false); return; }
+      if (KEYMAP[k]) { keys[KEYMAP[k]] = 0; highlight(KEYMAP[k], false); }
+    });
+    // Release everything if the tab loses focus (safety).
+    window.addEventListener("blur", () => {
+      for (const k in keys) keys[k] = 0;
+      setDeadman(false);
+      document.querySelectorAll(".dpad button").forEach(b => b.classList.remove("on"));
+    });
+
+    const highlight = (k, on) =>
+      document.querySelectorAll(`.dpad button[data-k="${k}"]`).forEach(b => b.classList.toggle("on", on));
+
+    // On-screen d-pad (pointer = works on touch + mouse)
+    document.querySelectorAll(".dpad button[data-k]").forEach(btn => {
+      const k = btn.dataset.k;
+      const down = (e) => { e.preventDefault(); keys[k] = 1; btn.classList.add("on"); };
+      const up   = () => { keys[k] = 0; btn.classList.remove("on"); };
+      btn.addEventListener("pointerdown", down);
+      btn.addEventListener("pointerup", up);
+      btn.addEventListener("pointerleave", up);
+      btn.addEventListener("pointercancel", up);
+    });
+
+    // Deadman on-screen button (hold)
+    const dm = $("deadman");
+    dm.addEventListener("pointerdown", (e) => { e.preventDefault(); setDeadman(true); });
+    dm.addEventListener("pointerup", () => setDeadman(false));
+    dm.addEventListener("pointerleave", () => setDeadman(false));
+    dm.addEventListener("pointercancel", () => setDeadman(false));
+
+    // E-stop
+    const triggerStop = () => { ctrlSock.send({ type: "stop" }); };
+    $("estop").addEventListener("click", triggerStop);
+
+    // Speed + gripper sliders
+    $("spd").addEventListener("input", (e) => { speed = e.target.value / 100; $("spdVal").textContent = e.target.value + " %"; });
+    let gripTimer = 0;
+    $("grip").addEventListener("input", (e) => {
+      gripper = e.target.value / 100;
+      $("gripVal").textContent = gripper < 0.05 ? "ouverte" : gripper > 0.95 ? "fermée" : Math.round(gripper*100) + " %";
+      clearTimeout(gripTimer);
+      gripTimer = setTimeout(() => ctrlSock.send({ type: "gripper", value: gripper }), 40);
+    });
+
+    // ---- Meters ----
+    const setMeter = (fillId, valId, v) => {
+      const w = Math.min(Math.abs(v), 1) * 50;                 // half-width %
+      const left = v < 0 ? (50 - w) : 50;
+      const fill = $(fillId);
+      fill.style.left = left + "%"; fill.style.width = w + "%";
+      $(valId).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
+    };
+
+    // ---- 20 Hz control loop ----
+    setInterval(() => {
+      let vx = (keys.fwd - keys.back) * speed;
+      let vy = (keys.right - keys.left) * speed;   // Q/E strafe
+      let wz = (keys.rotR - keys.rotL) * speed;    // A/D rotate
+      if (!deadman) { vx = vy = wz = 0; }
+      setMeter("m-vx", "v-vx", vx);
+      setMeter("m-vy", "v-vy", vy);
+      setMeter("m-wz", "v-wz", wz);
+      ctrlSock.send({ type: "deadman", value: deadman });
+      ctrlSock.send({ type: "base", vx, vy, wz });
+      setTile("t-dead", deadman ? "good" : "warning", deadman ? "ARMÉ" : "RELÂCHÉ");
+    }, 50);
+  })();
+  </script>
+</body>
+</html>

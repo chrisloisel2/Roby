@@ -1,0 +1,8 @@
+{
+  // Client config for the OPERATOR PC scripts (input_agent.py, web_server.py).
+  // The router (zenohd) runs on this same machine, so we connect to localhost.
+  mode: "client",
+  connect: {
+    endpoints: ["tcp/127.0.0.1:7447"],
+  },
+}
