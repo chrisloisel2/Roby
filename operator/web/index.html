@@ -138,6 +138,14 @@
       transition: transform .05s;
     }
     .estop:active { transform: translateY(1px); }
+    .reset {
+      appearance: none; border: 1px solid var(--hairline); cursor: pointer; width: 100%;
+      padding: 11px; border-radius: 10px; font-size: 13px; font-weight: 650; letter-spacing: .06em;
+      color: var(--ink-2); background: var(--surface-2); transition: all .08s;
+    }
+    .reset:hover { color: var(--ink); border-color: var(--accent); }
+    .reset:active { transform: translateY(1px); }
+    .reason { padding: 0 14px 12px; font-size: 12px; color: var(--muted); min-height: 1.2em; }
     .deadman {
       appearance: none; cursor: pointer; width: 100%; padding: 13px; border-radius: 10px;
       font-size: 14px; font-weight: 650; letter-spacing: .06em; user-select: none;
@@ -208,7 +216,7 @@
   </style>
 </head>
 <body>
-  <div class="banner" id="banner">⚠ ARRÊT D'URGENCE ACTIF — redémarrer robot_agent.py pour réarmer</div>
+  <div class="banner" id="banner"></div>
 
   <div class="app">
     <header>
@@ -241,6 +249,7 @@
           <div class="panel-title">Sécurité</div>
           <div class="safety">
             <button class="estop" id="estop">⛔ ARRÊT D'URGENCE</button>
+            <button class="reset" id="reset">↻ RÉARMER</button>
             <button class="deadman" id="deadman">HOMME-MORT — MAINTENIR
               <small>maintenir <span class="kbd">Espace</span> ou ce bouton pour autoriser le mouvement</small>
             </button>
@@ -250,8 +259,9 @@
             <div class="tile" id="t-robot"  data-s="critical"><div class="k">Robot</div><div class="v"><span class="ic"></span><span>—</span></div></div>
             <div class="tile" id="t-cam"    data-s="critical"><div class="k">Caméra</div><div class="v"><span class="ic"></span><span>—</span></div></div>
             <div class="tile" id="t-dead"   data-s="warning"><div class="k">Homme-mort</div><div class="v"><span class="ic"></span><span>—</span></div></div>
-            <div class="tile" id="t-move"   data-s="warning"><div class="k">Mouvement</div><div class="v"><span class="ic"></span><span>—</span></div></div>
+            <div class="tile" id="t-fsm"    data-s="warning"><div class="k">État base</div><div class="v"><span class="ic"></span><span>—</span></div></div>
           </div>
+          <div class="reason" id="reasonLine"></div>
         </section>
 
         <!-- Controls -->
@@ -281,7 +291,7 @@
               <span class="kbd">W</span>/<span class="kbd">S</span> avant·arrière ·
               <span class="kbd">A</span>/<span class="kbd">D</span> rotation ·
               <span class="kbd">Q</span>/<span class="kbd">E</span> latéral ·
-              <span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt
+              <span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt · <span class="kbd">R</span> réarmer
             </div>
           </div>
         </section>
@@ -335,7 +345,11 @@
     });
 
     // ---- Status (robot heartbeat + reported state) ----
+    // state.state is the real safety FSM: DISABLED / ENABLED / ESTOP / FAULT
+    // (see phd_mobile_base safety_node — /mobile_base/safety_state).
     let robotState = {};
+    const FSM_LABEL = { DISABLED: 'DÉSACTIVÉ', ENABLED: 'ACTIVÉ', ESTOP: 'ARRÊT URGENCE', FAULT: 'DÉFAUT' };
+    const FSM_STATUS = { DISABLED: 'warning', ENABLED: 'good', ESTOP: 'critical', FAULT: 'critical' };
     const setTile = (id, status, text) => {
       const t = $(id); t.dataset.s = status;
       t.querySelector(".v span:last-child").textContent = text;
@@ -345,11 +359,15 @@
       robotState = s.state || {};
       setTile("t-robot", s.robot ? "good" : "critical", s.robot ? "ACTIF" : "PERDU");
       $("brandDot").style.background = s.robot ? "var(--good)" : "var(--critical)";
-      const estop = !!robotState.estop;
-      $("banner").classList.toggle("show", estop);
-      setTile("t-move",
-        estop ? "critical" : (robotState.moving ? "good" : "warning"),
-        estop ? "E-STOP" : (robotState.moving ? "EN MOUVEMENT" : "ARRÊT"));
+
+      const fsm = robotState.state || null;
+      const stopped = fsm === "ESTOP" || fsm === "FAULT";
+      $("banner").classList.toggle("show", stopped);
+      $("banner").textContent = stopped
+        ? `⚠ ${FSM_LABEL[fsm]} — ${robotState.reason || ''} — cliquer RÉARMER puis ré-activer le homme-mort`
+        : '';
+      setTile("t-fsm", FSM_STATUS[fsm] || "warning", fsm ? FSM_LABEL[fsm] : "—");
+      $("reasonLine").textContent = robotState.reason ? `Raison : ${robotState.reason}` : '';
     });
 
     // ---- Connection badge (server link) ----
@@ -395,6 +413,7 @@
       const k = ev.key.toLowerCase();
       if (k === " ") { ev.preventDefault(); setDeadman(true); return; }
       if (k === "x") { triggerStop(); return; }
+      if (k === "r") { ctrlSock.send({ type: "reset" }); return; }
       if (KEYMAP[k]) { ev.preventDefault(); keys[KEYMAP[k]] = 1; highlight(KEYMAP[k], true); }
     });
     document.addEventListener("keyup", (ev) => {
@@ -433,6 +452,7 @@
     // E-stop
     const triggerStop = () => { ctrlSock.send({ type: "stop" }); };
     $("estop").addEventListener("click", triggerStop);
+    $("reset").addEventListener("click", () => ctrlSock.send({ type: "reset" }));
 
     // Speed + gripper sliders
     $("spd").addEventListener("input", (e) => { speed = e.target.value / 100; $("spdVal").textContent = e.target.value + " %"; });

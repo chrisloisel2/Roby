@@ -3,7 +3,7 @@
 
 Bridges Zenoh <-> browser. The browser never speaks Zenoh directly: this
 server relays the robot camera/state to the browser and forwards operator
-commands (base, deadman, gripper, E-stop) from the browser to Zenoh.
+commands (base, deadman, gripper, E-stop, reset) from the browser to Zenoh.
 
     Browser  <--WebSocket-->  web_server.py  <--Zenoh-->  robot PC
 
@@ -12,7 +12,7 @@ Endpoints
 GET  /             the operator UI (operator/web/index.html)
 WS   /ws/camera    server -> browser : base64 JPEG frames
 WS   /ws/status    server -> browser : robot heartbeat, reported state, fps
-WS   /ws/control   browser -> server : {type: base|deadman|stop|gripper}
+WS   /ws/control   browser -> server : {type: base|deadman|stop|reset|gripper}
 
 Note: run ONE operator input source at a time (this web UI OR input_agent.py) —
 both publish to the same command topics.
@@ -45,7 +45,7 @@ _heartbeat_ts = 0.0
 _robot_state = {}
 
 # --- Zenoh handles, populated on startup -------------------------------------
-Z = {"session": None, "base": None, "stop": None, "deadman": None, "gripper": None}
+Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None}
 
 
 def on_camera(sample):
@@ -84,6 +84,7 @@ async def lifespan(_app: FastAPI):
     Z["session"] = session
     Z["base"] = session.declare_publisher("robot/cmd/base")
     Z["stop"] = session.declare_publisher("robot/cmd/stop")
+    Z["reset"] = session.declare_publisher("robot/cmd/reset")
     Z["deadman"] = session.declare_publisher("operator/deadman")
     Z["gripper"] = session.declare_publisher("robot/cmd/gripper")
     print("web_server ready on http://0.0.0.0:8080")
@@ -150,6 +151,8 @@ def _handle_control(msg: dict) -> None:
         Z["deadman"].put("true" if msg.get("value") else "false")
     elif kind == "stop":
         Z["stop"].put("1")
+    elif kind == "reset":
+        Z["reset"].put("1")
     elif kind == "gripper":
         Z["gripper"].put(json.dumps({"gripper": float(msg.get("value", 0.0)), "ts": time.time()}))
 

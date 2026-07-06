@@ -60,6 +60,34 @@ scripts/start_operator.sh          # zenohd + web_server + input_agent
 OPERATOR_IP=192.168.1.50 scripts/start_robot.sh
 ```
 
+## Robot réel : pont vers phd_mobile_base (ROS 2)
+
+Sur le robot actuel, la base mobile est pilotée par un projet ROS 2 distinct
+et déjà existant : `~/02_RosBaseMobile/phd_mobile_base` (skid-steer 4 roues
+DAMIAO DM-2325, machine d'états de sécurité `DISABLED/ENABLED/ESTOP/FAULT`).
+**C'est ce projet, pas `robot/robot_agent.py` de ce dépôt, qui pilote
+réellement le robot.**
+
+`robot_agent.py` reste un gabarit générique (utile pour un robot sans stack
+ROS 2 existante, ou pour un futur sous-système type bras/mât). Pour la base
+mobile de ce robot, le pont Zenoh↔ROS 2 est un nœud dédié,
+`zenoh_bridge_node`, ajouté dans le paquet `phd_mobile_base` (voir son
+propre README, section « Téléopération réseau (Zenoh) »). **Ne pas lancer
+`robot_agent.py` en même temps que `zenoh_bridge_node`** : les deux
+publient sur les mêmes clés `robot/heartbeat` / `robot/state`.
+
+```bash
+# Sur le PC robot, après colcon build --symlink-install :
+source /opt/ros/lyrical/setup.bash
+source ~/ros2_ws/install/setup.bash
+export OPERATOR_IP=<ip_pc_operateur>
+ros2 launch phd_mobile_base simulation.launch.py &   # ou bringup.launch.py pour le matériel
+~/02_RosBaseMobile/.venv-zenoh/bin/python3 -m phd_mobile_base.nodes.zenoh_bridge_node
+```
+
+`camera_pub.py` de ce dépôt reste valable tel quel (aucune caméra
+disponible sur ce robot pour l'instant — `/dev/video*` absent).
+
 Interface web : `http://IP_DU_PC_OPERATEUR:8080`
 
 L'interface web est un **vrai poste de pilotage**, pas seulement un visualiseur :
@@ -80,13 +108,21 @@ vitesse, et pilotage clavier + pavé à l'écran.
 | `robot/cmd/base`             | ->   | `{"vx","vy","wz"}` normalisés `[-1, 1]`   |
 | `robot/cmd/arm`              | ->   | `{"joints":[...], "gripper", "mode"}`     |
 | `robot/cmd/stop`             | ->   | arrêt d'urgence (latch)                   |
+| `robot/cmd/reset`            | ->   | réarme après ESTOP/FAULT (jamais auto-enable) |
 | `operator/deadman`           | ->   | `"true"` / `"false"`                      |
 | `robot/heartbeat`            | <-   | vivacité robot (~5 Hz)                    |
-| `robot/state`                | <-   | état robot (moving, estop, ...)           |
+| `robot/state`                | <-   | état robot (schéma dépend du récepteur : voir ci-dessous) |
 | `robot/camera/front/jpeg`    | <-   | image JPEG                                |
 
-Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur ; c'est le
-`robot_agent` qui applique les limites physiques (`MAX_LINEAR`, `MAX_ANGULAR`).
+Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur. Qui applique les
+limites physiques dépend du récepteur : `robot_agent.py` générique
+(`MAX_LINEAR`/`MAX_ANGULAR`) ou, sur ce robot, `command_mux_node` de
+phd_mobile_base (`max_linear_speed`/`max_angular_speed` dans son
+`robot.yaml`). Le schéma JSON de `robot/state` diffère aussi selon la
+source : `{moving, estop, deadman_ok, fresh_cmd}` pour `robot_agent.py`
+générique, ou `{state, reason, command_timeout, motion_allowed}` (le FSM
+réel `DISABLED/ENABLED/ESTOP/FAULT`) via `zenoh_bridge_node`. L'UI web
+affiche ce second schéma.
 
 ## Sécurité
 

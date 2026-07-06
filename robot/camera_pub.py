@@ -36,7 +36,11 @@ def main() -> None:
         cap = cv2.VideoCapture(CAMERA_ID)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-        cap.set(cv2.CAP_PROP_FPS, FPS)
+        # Deliberately NOT setting CAP_PROP_FPS: on some UVC cameras (GStreamer
+        # backend) requesting an explicit fps the camera doesn't natively
+        # expose at this resolution breaks pipeline renegotiation entirely
+        # (isOpened() becomes False). We instead read at the camera's native
+        # rate and throttle publishing below via frame_period.
 
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open camera {CAMERA_ID}")
