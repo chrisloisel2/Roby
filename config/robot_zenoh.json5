@@ -2,11 +2,12 @@
   // Client config for the ROBOT PC scripts (robot_agent.py, camera_pub.py).
   // Point this at the OPERATOR PC that runs the zenohd router.
   //
-  // Either edit the IP below, or override it at runtime without touching
-  // this file:
-  //     OPERATOR_IP=192.168.1.50 python robot_agent.py
+  // Default below is Christopher's Mac on the current LAN (192.168.15.0/24).
+  // If the operator PC's IP changes (DHCP), either edit it here or override
+  // at runtime without touching this file:
+  //     OPERATOR_IP=192.168.15.107 python robot_agent.py
   mode: "client",
   connect: {
-    endpoints: ["tcp/192.168.1.50:7447"],
+    endpoints: ["tcp/192.168.15.107:7447"],
   },
 }

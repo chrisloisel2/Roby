@@ -32,12 +32,27 @@ scripts/
   start_robot.sh        lance robot_agent + camera_pub
 ```
 
-## Installation (sur les deux PC)
+## Installation
+
+PC opérateur :
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+PC robot — **ne pas** `pip install -r requirements.txt` tel quel : le wheel
+PyPI générique `opencv-python` est compilé sans GStreamer, et son backend
+V4L2 a échoué purement et simplement sur au moins une caméra USB utilisée
+ici (`can't open camera by index`), alors que l'OpenCV système (apt,
+GStreamer) ouvre la même caméra sans problème. Créer le venv avec
+`--system-site-packages` pour hériter du cv2 système et n'installer que
+`eclipse-zenoh` par-dessus :
+
+```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install eclipse-zenoh
 ```
 
 ## Configuration réseau
@@ -47,7 +62,7 @@ Renseigne l'IP de l'opérateur, soit dans `config/robot_zenoh.json5`, soit via
 la variable d'environnement `OPERATOR_IP` (prioritaire) :
 
 ```bash
-OPERATOR_IP=192.168.1.50 python robot/robot_agent.py
+OPERATOR_IP=192.168.15.107 python robot/robot_agent.py
 ```
 
 ## Démarrage
@@ -57,7 +72,7 @@ OPERATOR_IP=192.168.1.50 python robot/robot_agent.py
 scripts/start_operator.sh          # zenohd + web_server + input_agent
 
 # PC robot
-OPERATOR_IP=192.168.1.50 scripts/start_robot.sh
+OPERATOR_IP=192.168.15.107 scripts/start_robot.sh
 ```
 
 ## Robot réel : pont vers phd_mobile_base (ROS 2)
@@ -85,18 +100,43 @@ ros2 launch phd_mobile_base simulation.launch.py &   # ou bringup.launch.py pour
 ~/02_RosBaseMobile/.venv-zenoh/bin/python3 -m phd_mobile_base.nodes.zenoh_bridge_node
 ```
 
-`camera_pub.py` de ce dépôt reste valable tel quel (aucune caméra
-disponible sur ce robot pour l'instant — `/dev/video*` absent).
+`camera_pub.py` de ce dépôt fonctionne tel quel avec la caméra USB branchée
+sur ce robot (`/dev/video0`, HSTD USB3.0). Ne pas forcer `CAP_PROP_FPS` via
+`cap.set()` : cette caméra ne l'expose pas nativement à 640×480 et ça casse
+la pipeline GStreamer (`isOpened()` devient `False`) — le débit ~15 FPS est
+donc limité côté logiciel (`time.sleep`), pas via la propriété caméra.
 
 Interface web : `http://IP_DU_PC_OPERATEUR:8080`
 
 L'interface web est un **vrai poste de pilotage**, pas seulement un visualiseur :
 flux caméra, tuiles d'état (robot / caméra / homme-mort / mouvement), jauges de
-vitesse, et pilotage clavier + pavé à l'écran.
+vitesse, et pilotage clavier + pavé à l'écran + manette.
 
 - **Espace** (maintenu) = homme-mort, obligatoire pour bouger
 - **W/S** avant·arrière · **A/D** rotation · **Q/E** latéral
 - **X** ou le gros bouton = arrêt d'urgence · curseurs vitesse max + pince
+
+### Manette (Gamepad API)
+
+Le panneau **Manette**, en bas de la colonne de droite, est rétractable (cliquer
+sur son titre). Il utilise la Gamepad API du navigateur — testé avec une
+**Thrustmaster T.Flight Stick X** (4 axes, 12 boutons, 1 hat) branchée en USB
+sur le PC opérateur, mais fonctionne avec n'importe quelle manette reconnue par
+le navigateur.
+
+Le mapping est **entièrement dynamique**, pas câblé en dur : pour chaque
+action (avant/arrière, latéral, rotation, vitesse max, homme-mort, arrêt
+d'urgence, réarmer, pince ouvrir/fermer), cliquer « Assigner » puis bouger
+l'axe ou appuyer sur le bouton physique voulu — l'index est capturé et
+persisté dans le `localStorage` du navigateur. Un encart affiche les valeurs
+brutes des axes/boutons pour aider à repérer les indices, et « réinitialiser
+le mapping » revient aux valeurs par défaut (calibrées pour la T.Flight Stick
+X : axe 1 = avant/arrière inversé, axe 0 = latéral, axe 2 = rotation, axe 3 =
+slider de vitesse max, boutons 0–4 = homme-mort/stop/reset/pince).
+
+La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
+`[-1, 1]`) plutôt que de les remplacer ; le homme-mort est actif si la manette
+*ou* le clavier/pavé le tient enfoncé.
 
 > N'utiliser **qu'une seule source de commande à la fois** : l'interface web *ou*
 > `input_agent.py` (joystick) — les deux publient sur les mêmes topics.

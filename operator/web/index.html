@@ -192,6 +192,37 @@
     .kbd { display:inline-block; padding: 1px 6px; border:1px solid var(--hairline); border-radius:5px;
            background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-family: ui-monospace, monospace; }
 
+    /* Joystick */
+    .joy-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      cursor: pointer; user-select: none;
+    }
+    .joy-head .name {
+      color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px;
+    }
+    .joy-chevron { color: var(--muted); font-size: 11px; transition: transform .15s; }
+    .joy-chevron.open { transform: rotate(90deg); }
+    .joy-body { display: none; padding: 12px 14px 14px; gap: 10px; overflow: auto; }
+    .joy-body.open { display: grid; }
+    .joy-raw {
+      font-size: 10.5px; color: var(--muted); font-family: ui-monospace, monospace; line-height: 1.6;
+      background: var(--surface-2); border-radius: 8px; padding: 7px 9px; word-break: break-all;
+    }
+    .joy-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .joy-row .lbl { flex: 1; color: var(--ink-2); }
+    .joy-row .val { width: 60px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); font-size: 11px; }
+    .joy-row .inv { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .joy-row .assign {
+      appearance: none; border: 1px solid var(--hairline); background: var(--surface-2); color: var(--ink-2);
+      border-radius: 7px; padding: 4px 9px; font-size: 11px; cursor: pointer; white-space: nowrap;
+    }
+    .joy-row .assign.listening { background: var(--accent); color: #fff; border-color: transparent; animation: pulse 1s infinite; }
+    .joy-reset {
+      appearance: none; border: 1px solid var(--hairline); background: none; color: var(--muted);
+      border-radius: 7px; padding: 6px; font-size: 11px; cursor: pointer; justify-self: start;
+    }
+    .joy-reset:hover { color: var(--ink-2); }
+
     /* E-stop banner */
     .banner {
       display: none; position: fixed; inset: 0 0 auto 0; z-index: 20;
@@ -293,6 +324,19 @@
               <span class="kbd">Q</span>/<span class="kbd">E</span> latéral ·
               <span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt · <span class="kbd">R</span> réarmer
             </div>
+          </div>
+        </section>
+
+        <!-- Joystick -->
+        <section class="panel" id="joyPanel">
+          <div class="panel-title joy-head" id="joyHead">
+            <span>Manette <span class="name" id="joyName">— non détectée</span></span>
+            <span class="joy-chevron" id="joyChevron">▸</span>
+          </div>
+          <div class="joy-body" id="joyBody">
+            <div class="joy-raw" id="joyRaw">en attente d'une manette…</div>
+            <div id="joyRows"></div>
+            <button class="joy-reset" id="joyResetMap">↺ réinitialiser le mapping</button>
           </div>
         </section>
       </div>
@@ -457,12 +501,174 @@
     // Speed + gripper sliders
     $("spd").addEventListener("input", (e) => { speed = e.target.value / 100; $("spdVal").textContent = e.target.value + " %"; });
     let gripTimer = 0;
-    $("grip").addEventListener("input", (e) => {
-      gripper = e.target.value / 100;
+    function setGripper(v) {
+      gripper = Math.min(1, Math.max(0, v));
+      $("grip").value = Math.round(gripper * 100);
       $("gripVal").textContent = gripper < 0.05 ? "ouverte" : gripper > 0.95 ? "fermée" : Math.round(gripper*100) + " %";
       clearTimeout(gripTimer);
       gripTimer = setTimeout(() => ctrlSock.send({ type: "gripper", value: gripper }), 40);
+    }
+    $("grip").addEventListener("input", (e) => setGripper(e.target.value / 100));
+
+    // ================= JOYSTICK (Gamepad API) =================
+    // Manette testée : Thrustmaster T.Flight Stick X (4 axes, 12 boutons, 1 hat).
+    // Mapping entièrement dynamique : cliquer "Assigner" puis bouger l'axe ou
+    // appuyer sur le bouton physique l'assigne. Persisté en localStorage.
+    const AXIS_DEADZONE = 0.08;
+    const JOY_KEY = "roby.joystick.mapping.v1";
+    const JOY_DEFAULTS = {
+      axisVx: 1, invVx: true,
+      axisVy: 0, invVy: false,
+      axisWz: 2, invWz: false,
+      axisSpeed: 3, invSpeed: false,
+      btnDeadman: 0, btnStop: 1, btnReset: 2, btnGripOpen: 3, btnGripClose: 4,
+    };
+    const JOY_ACTIONS = [
+      { key: "axisVx",     label: "Avant / arrière",  kind: "axis",   invKey: "invVx" },
+      { key: "axisVy",     label: "Latéral",          kind: "axis",   invKey: "invVy" },
+      { key: "axisWz",     label: "Rotation",         kind: "axis",   invKey: "invWz" },
+      { key: "axisSpeed",  label: "Vitesse max (slider)", kind: "axis", invKey: "invSpeed" },
+      { key: "btnDeadman", label: "Homme-mort",       kind: "button" },
+      { key: "btnStop",    label: "Arrêt d'urgence",  kind: "button" },
+      { key: "btnReset",   label: "Réarmer",          kind: "button" },
+      { key: "btnGripOpen",  label: "Pince : ouvrir", kind: "button" },
+      { key: "btnGripClose", label: "Pince : fermer", kind: "button" },
+    ];
+
+    let joyMap = { ...JOY_DEFAULTS };
+    try { Object.assign(joyMap, JSON.parse(localStorage.getItem(JOY_KEY) || "{}")); } catch {}
+    const saveJoyMap = () => localStorage.setItem(JOY_KEY, JSON.stringify(joyMap));
+
+    let learningKey = null;
+    let joyIndex = null;
+    let prevJoyButtons = [];
+
+    const joyHead = $("joyHead"), joyBody = $("joyBody"), joyChevron = $("joyChevron"), joyName = $("joyName");
+    joyHead.addEventListener("click", () => {
+      const open = joyBody.classList.toggle("open");
+      joyChevron.classList.toggle("open", open);
     });
+
+    function renderJoyRows() {
+      const wrap = $("joyRows");
+      wrap.innerHTML = "";
+      for (const a of JOY_ACTIONS) {
+        const row = document.createElement("div");
+        row.className = "joy-row";
+        const cur = joyMap[a.key];
+        const curText = (cur == null || cur < 0) ? "—" : (a.kind === "axis" ? "axe " + cur : "bouton " + cur);
+        const invHtml = a.kind === "axis"
+          ? '<label class="inv"><input type="checkbox" id="joyinv-' + a.key + '"' +
+            (joyMap[a.invKey] ? " checked" : "") + '> inv.</label>'
+          : "";
+        row.innerHTML =
+          '<span class="lbl">' + a.label + '</span>' +
+          '<span class="val" id="joyval-' + a.key + '">' + curText + '</span>' +
+          invHtml +
+          '<button class="assign" data-key="' + a.key + '">Assigner</button>';
+        wrap.appendChild(row);
+        if (a.kind === "axis") {
+          $("joyinv-" + a.key).addEventListener("change", (e) => { joyMap[a.invKey] = e.target.checked; saveJoyMap(); });
+        }
+      }
+      wrap.querySelectorAll(".assign").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          wrap.querySelectorAll(".assign").forEach((b) => { b.classList.remove("listening"); b.textContent = "Assigner"; });
+          learningKey = btn.dataset.key;
+          btn.classList.add("listening");
+          btn.textContent = "…appuyer / bouger";
+        });
+      });
+    }
+    renderJoyRows();
+
+    $("joyResetMap").addEventListener("click", () => {
+      joyMap = { ...JOY_DEFAULTS };
+      saveJoyMap();
+      renderJoyRows();
+    });
+
+    window.addEventListener("gamepadconnected", (e) => { joyIndex = e.gamepad.index; joyName.textContent = "— " + e.gamepad.id; });
+    window.addEventListener("gamepaddisconnected", (e) => {
+      if (joyIndex === e.gamepad.index) {
+        joyIndex = null;
+        joyName.textContent = "— non détectée";
+        $("joyRaw").textContent = "en attente d'une manette…";
+      }
+    });
+
+    function pollGamepad() {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      let gp = joyIndex != null ? pads[joyIndex] : null;
+      if (!gp) gp = Array.prototype.find.call(pads, (p) => p) || null;
+      if (gp && joyIndex == null) { joyIndex = gp.index; joyName.textContent = "— " + gp.id; }
+      return gp;
+    }
+
+    function finishAssign(key, value) {
+      joyMap[key] = value;
+      saveJoyMap();
+      const kind = JOY_ACTIONS.find((a) => a.key === key).kind;
+      const val = $("joyval-" + key);
+      if (val) val.textContent = kind === "axis" ? "axe " + value : "bouton " + value;
+      const btn = document.querySelector('.assign[data-key="' + key + '"]');
+      if (btn) { btn.classList.remove("listening"); btn.textContent = "Assigner"; }
+      learningKey = null;
+    }
+
+    // Polled once per control tick (50 Hz) — reads gamepad state, drives the
+    // learn-mode capture, and returns the normalized contribution to send.
+    function updateJoystick() {
+      const gp = pollGamepad();
+      const out = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false };
+      if (!gp) { $("joyRaw").textContent = "en attente d'une manette…"; return out; }
+
+      const axes = gp.axes, buttons = gp.buttons;
+      const activeBtns = [];
+      for (let i = 0; i < buttons.length; i++) if (buttons[i].pressed) activeBtns.push(i);
+      let raw = "axes: ";
+      for (let i = 0; i < axes.length; i++) raw += i + ":" + axes[i].toFixed(2) + "  ";
+      raw += "  boutons actifs: " + (activeBtns.length ? activeBtns.join(",") : "—");
+      $("joyRaw").textContent = raw;
+
+      if (learningKey) {
+        const action = JOY_ACTIONS.find((a) => a.key === learningKey);
+        if (action.kind === "axis") {
+          const idx = axes.findIndex((v) => Math.abs(v) > 0.6);
+          if (idx >= 0) finishAssign(learningKey, idx);
+        } else if (activeBtns.length) {
+          finishAssign(learningKey, activeBtns[0]);
+        }
+      }
+
+      const axisVal = (idx, inv) => {
+        if (idx == null || idx < 0 || idx >= axes.length) return 0;
+        let v = axes[idx];
+        if (Math.abs(v) < AXIS_DEADZONE) v = 0;
+        return inv ? -v : v;
+      };
+      const btnHeld = (idx) => idx != null && idx >= 0 && idx < buttons.length && buttons[idx].pressed;
+
+      out.vx = axisVal(joyMap.axisVx, joyMap.invVx);
+      out.vy = axisVal(joyMap.axisVy, joyMap.invVy);
+      out.wz = axisVal(joyMap.axisWz, joyMap.invWz);
+      if (joyMap.axisSpeed != null && joyMap.axisSpeed >= 0 && joyMap.axisSpeed < axes.length) {
+        let v = axes[joyMap.axisSpeed];
+        if (joyMap.invSpeed) v = -v;
+        out.speed = Math.min(1, Math.max(0, (v + 1) / 2));
+      }
+      out.deadman = btnHeld(joyMap.btnDeadman);
+
+      const pressedNow = buttons.map((b) => b.pressed);
+      const rising = (idx) => idx != null && idx >= 0 && pressedNow[idx] && !prevJoyButtons[idx];
+      if (rising(joyMap.btnStop)) triggerStop();
+      if (rising(joyMap.btnReset)) ctrlSock.send({ type: "reset" });
+      if (btnHeld(joyMap.btnGripOpen)) setGripper(gripper - 0.02);
+      if (btnHeld(joyMap.btnGripClose)) setGripper(gripper + 0.02);
+      prevJoyButtons = pressedNow;
+
+      return out;
+    }
 
     // ---- Meters ----
     const setMeter = (fillId, valId, v) => {
@@ -475,16 +681,21 @@
 
     // ---- 20 Hz control loop ----
     setInterval(() => {
-      let vx = (keys.fwd - keys.back) * speed;
-      let vy = (keys.right - keys.left) * speed;   // Q/E strafe
-      let wz = (keys.rotR - keys.rotL) * speed;    // A/D rotate
-      if (!deadman) { vx = vy = wz = 0; }
+      const joy = updateJoystick();
+      const activeDeadman = deadman || joy.deadman;
+      if (joy.speed != null) speed = joy.speed;
+
+      let vx = Math.max(-1, Math.min(1, (keys.fwd - keys.back) + joy.vx)) * speed;
+      let vy = Math.max(-1, Math.min(1, (keys.right - keys.left) + joy.vy)) * speed;   // Q/E strafe
+      let wz = Math.max(-1, Math.min(1, (keys.rotR - keys.rotL) + joy.wz)) * speed;    // A/D rotate
+      if (!activeDeadman) { vx = vy = wz = 0; }
       setMeter("m-vx", "v-vx", vx);
       setMeter("m-vy", "v-vy", vy);
       setMeter("m-wz", "v-wz", wz);
-      ctrlSock.send({ type: "deadman", value: deadman });
+      ctrlSock.send({ type: "deadman", value: activeDeadman });
       ctrlSock.send({ type: "base", vx, vy, wz });
-      setTile("t-dead", deadman ? "good" : "warning", deadman ? "ARMÉ" : "RELÂCHÉ");
+      $("deadman").classList.toggle("armed", activeDeadman);
+      setTile("t-dead", activeDeadman ? "good" : "warning", activeDeadman ? "ARMÉ" : "RELÂCHÉ");
     }, 50);
   })();
   </script>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Robot PC: start the robot agent and camera publisher.
 # Set OPERATOR_IP to the operator PC address, e.g.:
-#     OPERATOR_IP=192.168.1.50 scripts/start_robot.sh
+#     OPERATOR_IP=192.168.15.107 scripts/start_robot.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
