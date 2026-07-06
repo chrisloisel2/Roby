@@ -9,8 +9,17 @@ Base command contract: vx / vy / wz are normalized to [-1, 1]; the robot
 agent scales them to physical velocity limits.
 """
 import json
+import os
 import time
 from pathlib import Path
+
+# Must be set before `import pygame`: SDL2's HIDAPI joystick backend segfaults
+# on macOS for some devices (Thrustmaster T.Flight Stick X confirmed) as soon
+# as a HID input report comes in (crash in libSDL2's hid_report_callback,
+# reached from pygame.event.pump() — see macOS crash report, faulting thread
+# through IOHIDDeviceInputReportApplier). Forcing the legacy IOKit joystick
+# backend avoids that codepath entirely.
+os.environ.setdefault("SDL_JOYSTICK_HIDAPI", "0")
 
 import pygame
 import zenoh
