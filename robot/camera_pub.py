@@ -60,7 +60,7 @@ def main() -> None:
         # into ever-growing latency instead of just a lower delivered fps.
         pub = session.declare_publisher(
             KEY,
-            congestion_control=zenoh.CongestionControl.DROP(),
+            congestion_control=zenoh.CongestionControl.DROP,
             express=True,
         )
         env_id = os.environ.get("CAMERA_ID")
