@@ -16,7 +16,7 @@ import cv2
 import zenoh
 
 KEY = "robot/camera/front/jpeg"
-WIDTH, HEIGHT, FPS = 640, 480, 15
+WIDTH, HEIGHT, FPS = 1920, 1080, 15
 JPEG_QUALITY = 70
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
 
