@@ -65,8 +65,8 @@ CAN_IDS = [0x01, 0x02, 0x03, 0x04]
 MST_IDS = [0x11, 0x12, 0x13, 0x14]
 INVERT  = [+1,   -1,   -1,   +1]
 KD = 3.0
-MAX_VEL = 60.0   # rad/s -- translation wheel-speed scale (empirically tuned)
-ROT_VEL = 50.0   # rad/s -- rotation wheel-speed scale (empirically tuned)
+MAX_VEL = 30.0   # rad/s -- translation wheel-speed scale (empirically tuned, halved 2026-07-06)
+ROT_VEL = 25.0   # rad/s -- rotation wheel-speed scale (empirically tuned, halved 2026-07-06)
 
 # Brief exponential ramp toward whatever target is being sent -- a real
 # command (apply_base_command) or zero (stop_robot) -- instead of snapping
