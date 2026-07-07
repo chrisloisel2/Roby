@@ -3,9 +3,19 @@
 
 Reads a camera, encodes each frame as JPEG, and publishes it on Zenoh.
 
-MVP: JPEG over Zenoh at ~30 FPS in 1920x1080. For true low latency at high
+MVP: JPEG over Zenoh at ~30 FPS in 640x480. For true low latency at high
 resolution, move the video to H.264/WebRTC and keep Zenoh for commands,
 state, heartbeat, and supervision.
+
+Resolution note (2026-07-07): 1920x1080 and 1280x720 were tried on this
+camera and both FAIL to negotiate -- cv2/GStreamer silently falls back to
+640x480 anyway, but the failed negotiation attempt leaves the pipeline
+degraded (measured 5.0fps / 10.0fps respectively, vs 29.9fps requesting
+640x480 directly -- see git history for the probe script/numbers).
+Requesting 640x480 up front avoids that degradation and comfortably clears
+a 25fps target. MJPG fourcc made no measurable difference at 640x480
+(already 29.9fps without it) but is kept since it's harmless and may help
+if the camera is ever swapped for one that needs it.
 """
 import json
 import os
@@ -16,7 +26,7 @@ import cv2
 import zenoh
 
 KEY = "robot/camera/front/jpeg"
-WIDTH, HEIGHT, FPS = 1920, 1080, 30
+WIDTH, HEIGHT, FPS = 640, 480, 30
 JPEG_QUALITY = 70
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
 
