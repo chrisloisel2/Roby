@@ -65,16 +65,15 @@ CAN_IDS = [0x01, 0x02, 0x03, 0x04]
 MST_IDS = [0x11, 0x12, 0x13, 0x14]
 INVERT  = [+1,   -1,   -1,   +1]
 KD = 3.0
-# Conservative defaults for network teleop: input_agent.py sends SNAPPED
+# mecanum_control.py's own tuned values (60/50), reverted back to on
+# 2026-07-07 after 15/12 felt underpowered -- input_agent.py sends SNAPPED
 # directions at full [-1,1] magnitude with no throttle modulation (unlike
 # mecanum_control.py's local joystick, which continuously scales speed via
-# an analog trigger) -- so *every* commanded movement here is a full-speed
-# move at whatever MAX_VEL/ROT_VEL is set to. 60/50 rad/s (mecanum_control.py's
-# own tuned values, meant for trigger-modulated speed) felt far too fast at
-# full snap magnitude in real testing (2026-07-07). Tune up gradually once
-# comfortable; override via env vars for quick tuning without editing code.
-MAX_VEL = float(os.environ.get("ROBY_MAX_VEL", "15.0"))   # rad/s -- translation
-ROT_VEL = float(os.environ.get("ROBY_ROT_VEL", "12.0"))   # rad/s -- rotation
+# an analog trigger), so *every* commanded movement here is a full-speed move
+# at whatever MAX_VEL/ROT_VEL is set to: test with the deadman ready to
+# release. Override via env vars for quick tuning without editing code.
+MAX_VEL = float(os.environ.get("ROBY_MAX_VEL", "60.0"))   # rad/s -- translation
+ROT_VEL = float(os.environ.get("ROBY_ROT_VEL", "50.0"))   # rad/s -- rotation
 
 # Per-wheel exponential ramp (matches mecanum_control.py exactly): slower to
 # speed up, quicker to slow down -- organic acceleration, snappy deceleration

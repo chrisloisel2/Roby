@@ -43,6 +43,9 @@ _frame_times = deque(maxlen=30)
 _heartbeat_ts = 0.0
 _robot_state = {}
 
+# --- Zenoh handles, populated on startup -------------------------------------
+Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None}
+
 # Per-connected-client wakeups for /ws/camera, so a new frame is pushed the
 # instant it arrives instead of the old fixed 1/30s poll (which both capped
 # latency at ~33ms extra and silently dropped delivery above 30fps).
