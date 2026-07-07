@@ -1,5 +1,4 @@
 #include <Arduino.h>
-
 /* =====================================================================
  *  Chariot motorisé sur mât vertical — firmware v2 « boucle fermée »
  *
@@ -37,6 +36,8 @@
 #define ENDSTOP_MIN    9   // Fin de course BAS,  actif LOW, pull-up interne (9)
 #define BRAKE_RELAY   11   // Relais frein 24V : HIGH = libéré, LOW = serré (11)
 
+
+
 // ── Paramètres machine ───────────────────────────────────────────────
 const long  STEPS_PER_REV     = 3200;                       // driver en 1/16
 const float MM_PER_REV        = 60.0;                       // pignon 60 mm/tour
@@ -46,9 +47,9 @@ const float ENC_COUNTS_PER_MM = ENC_COUNTS_PER_REV / MM_PER_REV; // 33.33
 
 // Périodes de pas en µs (période COMPLÈTE par pas ; l'ancien code
 // utilisait des demi-périodes : 500 µs demi-période ≡ 1000 µs ici).
-const unsigned int PERIOD_MOVE_SLOW      = 3000; // départ/arrivée très doux
-const unsigned int PERIOD_MOVE_FAST_UP   = 1000; // croisière montée
-const unsigned int PERIOD_MOVE_FAST_DOWN = 1000; // croisière descente.
+const unsigned int PERIOD_MOVE_SLOW      = 2000; // départ/arrivée très doux
+const unsigned int PERIOD_MOVE_FAST_UP   = 300; // croisière montée
+const unsigned int PERIOD_MOVE_FAST_DOWN = 300; // croisière descente.
 // Volontairement identiques par défaut (l'ancien commentaire « vitesses
 // différenciées » ne correspondait à rien). La descente étant aidée par
 // la gravité et la montée non, on peut ralentir la montée (augmenter
@@ -61,6 +62,18 @@ const unsigned int PERIOD_HOMING_FINAL   = 200;  // recul final (ex 100 µs demi
 const unsigned int PERIOD_JOG            = 400;  // jog (ex 200 µs demi)
 const unsigned int STEP_PULSE_US         = 10;   // largeur impulsion STEP
 const unsigned int DIR_SETUP_US          = 5;    // setup DIR avant STEP
+
+// ── Mode vitesse VEL:<mm/s> (téléop joystick) ────────────────────────
+// Vitesse continue signée : VEL:>0 monte, VEL:<0 descend, VEL:0 arrête.
+// La période de pas est calculée depuis la consigne : period_µs =
+// 1e6 / (|v| * STEPS_PER_MM). Un WATCHDOG homme-mort arrête le chariot
+// (+ frein) si aucun VEL n'est reçu pendant VEL_TIMEOUT_MS : le PC doit
+// donc RÉÉMETTRE la consigne périodiquement (≥ ~10 Hz).
+const float        VEL_MAX_MM_S   = 100.0; // vitesse max autorisée (clamp)
+const float        VEL_MIN_MM_S   = 1.0;   // sous ce seuil -> arrêt
+const unsigned int VEL_PERIOD_MIN = 187;   // ≈ 1e6/(100*53.33) : plancher période
+const unsigned int VEL_PERIOD_MAX = 18750; // ≈ 1e6/(1*53.33)   : plafond période
+const unsigned int VEL_TIMEOUT_MS = 300;   // watchdog homme-mort (sans VEL -> stop+frein)
 
 // ── Supervision boucle fermée ────────────────────────────────────────
 #define ENCODER_SUPERVISION 1        // 0 = boucle ouverte pure (banc de test)
@@ -96,8 +109,8 @@ bool   supEnabled  = (ENCODER_SUPERVISION != 0);
 
 // ── État machine ─────────────────────────────────────────────────────
 enum State : uint8_t { ST_IDLE, ST_PRE, ST_MOVE, ST_CORRECT, ST_JOG,
-                       ST_HOMING, ST_POST, ST_FDC };
-enum Pending : uint8_t { PEND_NONE, PEND_MOVE, PEND_JOG, PEND_HOMING };
+                       ST_VEL, ST_HOMING, ST_POST, ST_FDC };
+enum Pending : uint8_t { PEND_NONE, PEND_MOVE, PEND_JOG, PEND_VEL, PEND_HOMING };
 enum HomingPhase : uint8_t { HP_SEEK_MIN, HP_BACKOFF1, HP_SEEK_MAX,
                              HP_RETURN_MIN, HP_BACKOFF2 };
 
@@ -126,6 +139,13 @@ unsigned long nextStepDue = 0; // micros()
 
 // Jog
 bool jogDir = UP;
+
+// Mode vitesse VEL:
+bool          velDir = UP;
+unsigned int  velPeriod = PERIOD_JOG;   // période de pas courante (µs)
+bool          pendVelDir = UP;
+unsigned int  pendVelPeriod = PERIOD_JOG;
+unsigned long velLastCmdMs = 0;         // dernier VEL reçu (watchdog)
 
 // Homing
 HomingPhase hp;
@@ -244,7 +264,7 @@ void printPos() {
 void superviseStall() {
   if (!supEnabled || !encVerified) return;
   if (state != ST_MOVE && state != ST_CORRECT && state != ST_JOG &&
-      state != ST_HOMING) return;
+      state != ST_VEL && state != ST_HOMING) return;
   if (millis() - supLastCheck < SUPERVISION_PERIOD_MS) return;
   supLastCheck = millis();
 
@@ -672,6 +692,62 @@ void cmdHoming() {
   startPre(PEND_HOMING);
 }
 
+// ── Mode vitesse VEL:<mm/s> ─────────────────────────────────────────
+unsigned int velPeriodFromSpeed(float vabs) {
+  float p = 1000000.0 / (vabs * STEPS_PER_MM);
+  if (p < (float)VEL_PERIOD_MIN) p = VEL_PERIOD_MIN;
+  if (p > (float)VEL_PERIOD_MAX) p = VEL_PERIOD_MAX;
+  return (unsigned int)p;
+}
+
+void cmdVel(float v) {
+  float vabs = fabs(v);
+
+  // Consigne quasi nulle = demande d'arrêt (frein serré).
+  if (vabs < VEL_MIN_MM_S) {
+    if (state == ST_VEL) {
+      Serial.print(F("MSG:VEL_STOP,"));
+      resyncOnEncoder();
+      printPos();
+      Serial.println();
+      enterPost();
+    } else if (state == ST_PRE && pending == PEND_VEL) {
+      pending = PEND_NONE;
+      enterPost();
+    }
+    return;
+  }
+
+  if (vabs > VEL_MAX_MM_S) vabs = VEL_MAX_MM_S;        // clamp vitesse
+  bool dir = (v > 0) ? UP : DOWN;                       // >0 = montée
+  unsigned int period = velPeriodFromSpeed(vabs);
+  velLastCmdMs = millis();                              // rafraîchit le watchdog
+
+  if (state == ST_VEL) {                                // mise à jour en vol
+    if (dir != velDir) { setDir(dir); supReset(); }
+    velDir = dir;
+    velPeriod = period;
+    return;
+  }
+  if (state == ST_PRE && pending == PEND_VEL) {         // encore en libération frein
+    pendVelDir = dir;
+    pendVelPeriod = period;
+    return;
+  }
+  if (state != ST_IDLE) {                               // POS/homing/FDC en cours
+    Serial.println(F("MSG:REFUS,BUSY"));
+    return;
+  }
+  // Ne pas démarrer dans une butée déjà active (évite l'oscillation).
+  if ((dir == UP && esMax.active) || (dir == DOWN && esMin.active)) {
+    Serial.println(F("MSG:REFUS,FDC"));
+    return;
+  }
+  pendVelDir = dir;
+  pendVelPeriod = period;
+  startPre(PEND_VEL);
+}
+
 void handleCommand(const char *cmd) {
   Serial.print(F("ACK "));                        // format v1 conservé
   Serial.println(cmd);
@@ -692,6 +768,14 @@ void handleCommand(const char *cmd) {
       Serial.println(F("MSG:INCONNU,POS_INVALIDE"));
     else
       cmdPos(v);
+  }
+  else if (!strncmp(cmd, "VEL:", 4)) {
+    char *end;
+    float v = strtod(cmd + 4, &end);
+    if (end == cmd + 4 || *end != '\0')
+      Serial.println(F("MSG:INCONNU,VEL_INVALIDE"));
+    else
+      cmdVel(v);
   }
   else if (!strcmp(cmd, "H"))           cmdHoming();
   else if (!strcmp(cmd, "UP_START"))    cmdJog(UP);
@@ -768,6 +852,15 @@ void runState() {
           nextStepDue = micros();
           state = ST_JOG;
           break;
+        case PEND_VEL:
+          velDir = pendVelDir;
+          velPeriod = pendVelPeriod;
+          setDir(velDir);
+          supReset();
+          nextStepDue = micros();
+          velLastCmdMs = millis();   // fenêtre watchdog fraîche après le frein
+          state = ST_VEL;
+          break;
         case PEND_HOMING: homingStart(); state = ST_HOMING; break;
         default:          enterPost(); break;
       }
@@ -791,6 +884,23 @@ void runState() {
       if (jogDir == DOWN && esMin.active) { Serial.println(F("MSG:JOG_STOP")); fdcAbort(false); break; }
       doPulse(jogDir);
       scheduleNext(PERIOD_JOG);
+      break;
+
+    case ST_VEL:
+      // Watchdog homme-mort : sans nouveau VEL, on arrête + frein.
+      if (millis() - velLastCmdMs > VEL_TIMEOUT_MS) {
+        Serial.print(F("MSG:VEL_TIMEOUT,"));
+        resyncOnEncoder();
+        printPos();
+        Serial.println();
+        enterPost();
+        break;
+      }
+      if ((long)(micros() - nextStepDue) < 0) break;
+      if (velDir == UP   && esMax.active) { Serial.println(F("MSG:VEL_STOP")); fdcAbort(true);  break; }
+      if (velDir == DOWN && esMin.active) { Serial.println(F("MSG:VEL_STOP")); fdcAbort(false); break; }
+      doPulse(velDir);
+      scheduleNext(velPeriod);
       break;
 
     case ST_HOMING:
@@ -833,7 +943,7 @@ void setup() {
 
   Serial.println(F("MSG:BOOT,Chariot v2 boucle fermee"));
   Serial.println(F("MSG:PINOUT,PUL:D3,DIR:D4,ENA:D5,MIN:D8,MAX:D7,BRAKE:D10,ENCA:D2,ENCB:D6"));
-  Serial.println(F("MSG:CMDS,H|POS:<mm>|UP_START|UP_STOP|DOWN_START|DOWN_STOP|STOP|BRAKE:0/1|FDC"));
+  Serial.println(F("MSG:CMDS,H|POS:<mm>|VEL:<mm/s>|UP_START|UP_STOP|DOWN_START|DOWN_STOP|STOP|BRAKE:0/1|FDC"));
 
   nextTelemetry = micros() + TELEMETRY_PERIOD_US;
 }
