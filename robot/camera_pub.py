@@ -26,9 +26,10 @@ KEY = "robot/camera/front/jpeg"
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 JPEG_QUALITY = 40  # lowered from 70 to offset the larger frame size at 1920x1080
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
-# Physical mount: confirmed visually 2026-07-07 (upright test subject in
-# frame) that the camera needs a 90° CCW rotation, not 180°.
-ROTATE = cv2.ROTATE_180
+# Physical mount: was upside-down, corrected by ROTATE_180 (image confirmed
+# upright). Camera remounted inverted again (2026-07-07) -- that 180° flip
+# now cancels the previous one, so no software rotation is needed.
+ROTATE = None
 # Diagnostic only, off by default: burns the robot's wall-clock time into
 # each frame so true end-to-end (capture-to-screen) latency can be measured
 # by comparing it against the viewer's clock -- catches latency hidden
