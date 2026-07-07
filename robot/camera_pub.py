@@ -3,19 +3,16 @@
 
 Reads a camera, encodes each frame as JPEG, and publishes it on Zenoh.
 
-MVP: JPEG over Zenoh at ~30 FPS in 640x480. For true low latency at high
-resolution, move the video to H.264/WebRTC and keep Zenoh for commands,
-state, heartbeat, and supervision.
+MVP: JPEG over Zenoh at 1920x1080. For true low latency at high resolution,
+move the video to H.264/WebRTC and keep Zenoh for commands, state,
+heartbeat, and supervision.
 
-Resolution note (2026-07-07): 1920x1080 and 1280x720 were tried on this
-camera and both FAIL to negotiate -- cv2/GStreamer silently falls back to
-640x480 anyway, but the failed negotiation attempt leaves the pipeline
-degraded (measured 5.0fps / 10.0fps respectively, vs 29.9fps requesting
-640x480 directly -- see git history for the probe script/numbers).
-Requesting 640x480 up front avoids that degradation and comfortably clears
-a 25fps target. MJPG fourcc made no measurable difference at 640x480
-(already 29.9fps without it) but is kept since it's harmless and may help
-if the camera is ever swapped for one that needs it.
+Resolution note (2026-07-07): 1920x1080 and 1280x720 previously measured at
+5.0fps / 10.0fps on this camera (vs 29.9fps at 640x480 -- see git history),
+degraded by a failed mode negotiation. Back on 1920x1080 per request despite
+that; JPEG_QUALITY lowered to offset the larger frame size (~6.75x the
+pixels of 640x480) since resolution and compression are independent knobs --
+if fps regresses again, that prior measurement is why.
 """
 import json
 import os
@@ -26,9 +23,12 @@ import cv2
 import zenoh
 
 KEY = "robot/camera/front/jpeg"
-WIDTH, HEIGHT, FPS = 640, 480, 30
-JPEG_QUALITY = 70
+WIDTH, HEIGHT, FPS = 1920, 1080, 30
+JPEG_QUALITY = 40  # lowered from 70 to offset the larger frame size at 1920x1080
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
+# Physical mount: confirmed visually 2026-07-07 (upright test subject in
+# frame) that the camera needs a 90° CCW rotation, not 180°.
+ROTATE = cv2.ROTATE_180
 # Diagnostic only, off by default: burns the robot's wall-clock time into
 # each frame so true end-to-end (capture-to-screen) latency can be measured
 # by comparing it against the viewer's clock -- catches latency hidden
@@ -114,6 +114,9 @@ def main() -> None:
                     time.sleep(0.1)
                     next_tick = time.monotonic()
                     continue
+
+                if ROTATE is not None:
+                    frame = cv2.rotate(frame, ROTATE)
 
                 if DEBUG_TIMESTAMP:
                     cv2.putText(frame, f"{time.time():.3f}", (10, 40),
