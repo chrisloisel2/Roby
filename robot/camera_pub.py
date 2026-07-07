@@ -24,7 +24,7 @@ import zenoh
 
 KEY = "robot/camera/front/jpeg"
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
-JPEG_QUALITY = 15  # lowered from 40 (2026-07-07) to cut per-frame size/latency
+JPEG_QUALITY = 40  # lowered from 40 (2026-07-07) to cut per-frame size/latency
                     # further without touching WIDTH/HEIGHT (FOV unchanged)
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
 # Physical mount: was upside-down, corrected by ROTATE_180 (image confirmed
