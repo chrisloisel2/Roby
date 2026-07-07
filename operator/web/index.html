@@ -365,10 +365,11 @@
     const host = location.host;
 
     // ---- Auto-reconnecting WebSocket helper ----
-    function ws(path, onmsg, onopen) {
+    function ws(path, onmsg, onopen, binary) {
       let sock, alive = false;
       const connect = () => {
         sock = new WebSocket(`ws://${host}${path}`);
+        if (binary) sock.binaryType = "arraybuffer";
         sock.onopen = () => { alive = true; onopen && onopen(sock); };
         sock.onmessage = onmsg;
         sock.onclose = () => { alive = false; setTimeout(connect, 800); };
@@ -380,13 +381,20 @@
 
     // ---- Camera ----
     const cam = $("cam"), noSignal = $("noSignal");
-    let lastFrame = 0, frameStamps = [];
+    let lastFrame = 0, frameStamps = [], camObjectUrl = null;
     const camSock = ws("/ws/camera", (e) => {
-      cam.src = "data:image/jpeg;base64," + e.data;
+      // Binary frames + Blob URL instead of base64 data URIs: skips the
+      // ~33% base64 size overhead and its encode/decode cost on both ends,
+      // which matters at 1080p where every extra ms per frame adds latency.
+      const url = URL.createObjectURL(new Blob([e.data], { type: "image/jpeg" }));
+      const prev = camObjectUrl;
+      camObjectUrl = url;
+      cam.onload = () => { if (prev) URL.revokeObjectURL(prev); };
+      cam.src = url;
       const now = performance.now();
       lastFrame = now; frameStamps.push(now);
       if (frameStamps.length > 30) frameStamps.shift();
-    });
+    }, null, true);
 
     // ---- Status (robot heartbeat + reported state) ----
     // state schema published by robot/robot_agent.py:

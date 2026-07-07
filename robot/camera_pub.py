@@ -3,7 +3,7 @@
 
 Reads a camera, encodes each frame as JPEG, and publishes it on Zenoh.
 
-MVP: JPEG over Zenoh at ~15 FPS in 640x480. For true low latency at high
+MVP: JPEG over Zenoh at ~30 FPS in 1920x1080. For true low latency at high
 resolution, move the video to H.264/WebRTC and keep Zenoh for commands,
 state, heartbeat, and supervision.
 """
@@ -16,7 +16,7 @@ import cv2
 import zenoh
 
 KEY = "robot/camera/front/jpeg"
-WIDTH, HEIGHT, FPS = 1920, 1080, 15
+WIDTH, HEIGHT, FPS = 1920, 1080, 30
 JPEG_QUALITY = 70
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
 
@@ -55,11 +55,28 @@ def open_camera(camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
 
 def main() -> None:
     with zenoh.open(load_config()) as session:
-        pub = session.declare_publisher(KEY)
+        # DROP + express: under network congestion, prefer dropping a stale
+        # frame over queueing it — queueing is exactly what turns a slow link
+        # into ever-growing latency instead of just a lower delivered fps.
+        pub = session.declare_publisher(
+            KEY,
+            congestion_control=zenoh.CongestionControl.DROP(),
+            express=True,
+        )
         env_id = os.environ.get("CAMERA_ID")
         cap, camera_id = open_camera(int(env_id) if env_id is not None else None)
+        # Most UVC webcams only expose their raw (YUYV) format at high
+        # resolutions like 1080p at a few fps — USB bandwidth for uncompressed
+        # video that large is too high. Requesting MJPG (compressed in the
+        # camera's own hardware) is what actually unlocks 30fps at 1080p; this
+        # must be set before the resolution for the driver to renegotiate.
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+        # Keep the driver's internal buffer at 1 frame so cap.read() always
+        # returns the newest frame instead of draining a backlog that was
+        # queued while we were busy encoding/publishing the previous one.
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         # Deliberately NOT setting CAP_PROP_FPS: on some UVC cameras (GStreamer
         # backend) requesting an explicit fps the camera doesn't natively
         # expose at this resolution breaks pipeline renegotiation entirely
@@ -70,10 +87,12 @@ def main() -> None:
         print(f"camera_pub streaming camera {camera_id} on '{KEY}'")
 
         try:
+            next_tick = time.monotonic()
             while True:
                 ok, frame = cap.read()
                 if not ok:
                     time.sleep(0.1)
+                    next_tick = time.monotonic()
                     continue
 
                 ok, jpg = cv2.imencode(
@@ -82,7 +101,19 @@ def main() -> None:
                 if ok:
                     pub.put(jpg.tobytes())
 
-                time.sleep(frame_period)
+                # Pace by a fixed deadline instead of a flat sleep: if this
+                # iteration ran long (slow encode/publish), don't add a full
+                # frame_period on top of that overrun, and don't try to burst
+                # extra frames to catch up either — just resync to "now" and
+                # keep going. A flat sleep-after-work compounds any overrun
+                # frame after frame, which is how latency creeps upward over
+                # time instead of staying flat.
+                next_tick += frame_period
+                delay = next_tick - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                else:
+                    next_tick = time.monotonic()
         except KeyboardInterrupt:
             pass
         finally:

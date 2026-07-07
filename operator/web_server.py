@@ -10,7 +10,7 @@ commands (base, deadman, gripper, E-stop, reset) from the browser to Zenoh.
 Endpoints
 ---------
 GET  /             the operator UI (operator/web/index.html)
-WS   /ws/camera    server -> browser : base64 JPEG frames
+WS   /ws/camera    server -> browser : binary JPEG frames
 WS   /ws/status    server -> browser : robot heartbeat, reported state, fps
 WS   /ws/control   browser -> server : {type: base|deadman|stop|reset|gripper}
 
@@ -18,7 +18,6 @@ Note: run ONE operator input source at a time (this web UI OR input_agent.py) â€
 both publish to the same command topics.
 """
 import asyncio
-import base64
 import json
 import time
 from collections import deque
@@ -44,8 +43,16 @@ _frame_times = deque(maxlen=30)
 _heartbeat_ts = 0.0
 _robot_state = {}
 
-# --- Zenoh handles, populated on startup -------------------------------------
-Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None}
+# Per-connected-client wakeups for /ws/camera, so a new frame is pushed the
+# instant it arrives instead of the old fixed 1/30s poll (which both capped
+# latency at ~33ms extra and silently dropped delivery above 30fps).
+_camera_events: set[asyncio.Event] = set()
+_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _notify_camera_clients() -> None:
+    for event in _camera_events:
+        event.set()
 
 
 def on_camera(sample):
@@ -53,6 +60,8 @@ def on_camera(sample):
     _frame["data"] = sample.payload.to_bytes()
     _frame["ts"] = now
     _frame_times.append(now)
+    if _loop is not None:
+        _loop.call_soon_threadsafe(_notify_camera_clients)
 
 
 def on_heartbeat(_sample):
@@ -77,6 +86,8 @@ def _fps() -> float:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global _loop
+    _loop = asyncio.get_running_loop()
     session = zenoh.open(zenoh.Config.from_file(str(CONFIG)))
     session.declare_subscriber(CAMERA_KEY, on_camera)
     session.declare_subscriber(HEARTBEAT_KEY, on_heartbeat)
@@ -110,15 +121,24 @@ async def index():
 @app.websocket("/ws/camera")
 async def camera_ws(ws: WebSocket):
     await ws.accept()
+    event = asyncio.Event()
+    _camera_events.add(event)
     last_ts = 0.0
     try:
+        if _frame["data"] is not None:
+            last_ts = _frame["ts"]
+            await ws.send_bytes(_frame["data"])
         while True:
-            if _frame["data"] is not None and _frame["ts"] != last_ts:
-                last_ts = _frame["ts"]
-                await ws.send_text(base64.b64encode(_frame["data"]).decode("ascii"))
-            await asyncio.sleep(1 / 30)
+            await event.wait()
+            event.clear()
+            data, ts = _frame["data"], _frame["ts"]
+            if data is not None and ts != last_ts:
+                last_ts = ts
+                await ws.send_bytes(data)
     except WebSocketDisconnect:
         pass
+    finally:
+        _camera_events.discard(event)
 
 
 @app.websocket("/ws/status")

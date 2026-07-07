@@ -62,15 +62,16 @@ Renseigne l'IP de l'opérateur, soit dans `config/robot_zenoh.json5`, soit via
 la variable d'environnement `OPERATOR_IP` (prioritaire) :
 
 ```bash
-OPERATOR_IP=100.123.136.106 python robot/robot_agent.py
+OPERATOR_IP=192.168.15.106 python robot/robot_agent.py
 ```
 
 `zenohd` écoute sur `0.0.0.0:7447` (voir `config/router.json5`), donc
 n'importe quelle IP joignable du PC opérateur fonctionne : IP locale
-(192.168.x, plus faible latence si les deux PC sont sur le même LAN) ou IP
-**Tailscale** (100.x, quand robot et opérateur ne sont pas sur le même
-réseau — cas actuel, IP par défaut ci-dessus). `tailscale ip -4` sur le PC
-opérateur donne l'IP à utiliser si elle change.
+(192.168.x, plus faible latence, à utiliser quand les deux PC sont sur le
+même LAN — cas actuel, IP par défaut ci-dessus) ou IP **Tailscale** (100.x,
+quand robot et opérateur ne sont pas sur le même réseau). `ipconfig getifaddr
+en0` (local) ou `tailscale ip -4` (Tailscale) sur le PC opérateur donne l'IP
+à utiliser si elle change.
 
 ## Démarrage
 
@@ -79,7 +80,7 @@ opérateur donne l'IP à utiliser si elle change.
 scripts/start_operator.sh          # zenohd + web_server + input_agent
 
 # PC robot
-OPERATOR_IP=100.123.136.106 scripts/start_robot.sh
+OPERATOR_IP=192.168.15.106 scripts/start_robot.sh
 ```
 
 ## Robot réel : pilotage moteur direct (sans ROS 2)
