@@ -299,6 +299,17 @@
         <section class="panel">
           <div class="panel-title">Contrôles</div>
           <div class="controls">
+            <div class="row" id="browserCtrlRow">
+              <label style="flex-direction:row; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="browserCtrl">
+                <span>Piloter depuis ce navigateur</span>
+              </label>
+              <div class="hints" style="margin-top:2px;">
+                Décoché par défaut : si <span class="kbd">input_agent.py</span> (manette physique)
+                pilote déjà le robot, laisser cette case décochée — sinon les deux
+                se battent sur les mêmes commandes et le robot ne bouge plus du tout.
+              </div>
+            </div>
             <div class="dpad">
               <button class="empty"></button>
               <button data-k="fwd">↑<small>W</small></button>
@@ -688,10 +699,35 @@
       $(valId).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
     };
 
+    // ---- Browser-as-controller toggle ----
+    // Off by default: this loop below runs unconditionally the moment the
+    // page is open (e.g. just to watch the camera), and used to publish
+    // deadman/base at 20Hz regardless -- which silently fights any other
+    // command source (input_agent.py's joystick reader, running at 50Hz)
+    // publishing to the exact same Zenoh topics. Two sources racing on
+    // "deadman" means it flips true/false every other message, so
+    // deadman_ok reads false most of the time and the robot never
+    // actually moves, even though someone IS correctly holding the
+    // physical deadman button on their own controller. Gating all of it
+    // behind an explicit opt-in makes "just watching the camera" safe.
+    let browserControlEnabled = localStorage.getItem("roby.browserControl") === "1";
+    const browserCtrlBox = $("browserCtrl");
+    browserCtrlBox.checked = browserControlEnabled;
+    browserCtrlBox.addEventListener("change", (e) => {
+      browserControlEnabled = e.target.checked;
+      localStorage.setItem("roby.browserControl", browserControlEnabled ? "1" : "0");
+      if (!browserControlEnabled) {
+        // Release explicitly so this browser's last command doesn't linger
+        // as the most-recent one at the robot for CMD_TIMEOUT_SEC.
+        ctrlSock.send({ type: "deadman", value: false });
+        ctrlSock.send({ type: "base", vx: 0, vy: 0, wz: 0 });
+      }
+    });
+
     // ---- 20 Hz control loop ----
     setInterval(() => {
       const joy = updateJoystick();
-      const activeDeadman = deadman || joy.deadman;
+      const activeDeadman = (deadman || joy.deadman) && browserControlEnabled;
       if (joy.speed != null) speed = joy.speed;
 
       let vx = Math.max(-1, Math.min(1, (keys.fwd - keys.back) + joy.vx)) * speed;
@@ -701,8 +737,10 @@
       setMeter("m-vx", "v-vx", vx);
       setMeter("m-vy", "v-vy", vy);
       setMeter("m-wz", "v-wz", wz);
-      ctrlSock.send({ type: "deadman", value: activeDeadman });
-      ctrlSock.send({ type: "base", vx, vy, wz });
+      if (browserControlEnabled) {
+        ctrlSock.send({ type: "deadman", value: activeDeadman });
+        ctrlSock.send({ type: "base", vx, vy, wz });
+      }
       $("deadman").classList.toggle("armed", activeDeadman);
       setTile("t-dead", activeDeadman ? "good" : "warning", activeDeadman ? "ARMÉ" : "RELÂCHÉ");
     }, 50);
