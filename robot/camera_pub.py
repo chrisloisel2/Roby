@@ -15,10 +15,10 @@ from pathlib import Path
 import cv2
 import zenoh
 
-CAMERA_ID = int(os.environ.get("CAMERA_ID", "0"))
 KEY = "robot/camera/front/jpeg"
 WIDTH, HEIGHT, FPS = 640, 480, 15
 JPEG_QUALITY = 70
+MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
 
 
 def load_config() -> zenoh.Config:
@@ -30,10 +30,34 @@ def load_config() -> zenoh.Config:
     return config
 
 
+def open_camera(camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
+    """Open a working camera by index.
+
+    If ``camera_id`` is given (CAMERA_ID env var), use it directly. Otherwise
+    probe indices 0..MAX_PROBE_INDEX and return the first one that both opens
+    AND delivers a real frame: USB webcams commonly expose a second
+    metadata-only /dev/videoN node that opens fine but never reads, and the
+    index a given camera lands on shifts whenever the USB topology
+    re-enumerates (e.g. another device unplugged/replugged) — a hardcoded
+    index silently starts pointing at the wrong (or a dead) node.
+    """
+    candidates = [camera_id] if camera_id is not None else range(MAX_PROBE_INDEX + 1)
+    for idx in candidates:
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            ok, _ = cap.read()
+            if ok:
+                return cap, idx
+        cap.release()
+    tried = f"index {camera_id}" if camera_id is not None else f"indices 0..{MAX_PROBE_INDEX}"
+    raise RuntimeError(f"No working camera found (tried {tried})")
+
+
 def main() -> None:
     with zenoh.open(load_config()) as session:
         pub = session.declare_publisher(KEY)
-        cap = cv2.VideoCapture(CAMERA_ID)
+        env_id = os.environ.get("CAMERA_ID")
+        cap, camera_id = open_camera(int(env_id) if env_id is not None else None)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
         # Deliberately NOT setting CAP_PROP_FPS: on some UVC cameras (GStreamer
@@ -42,11 +66,8 @@ def main() -> None:
         # (isOpened() becomes False). We instead read at the camera's native
         # rate and throttle publishing below via frame_period.
 
-        if not cap.isOpened():
-            raise RuntimeError(f"Cannot open camera {CAMERA_ID}")
-
         frame_period = 1.0 / FPS
-        print(f"camera_pub streaming camera {CAMERA_ID} on '{KEY}'")
+        print(f"camera_pub streaming camera {camera_id} on '{KEY}'")
 
         try:
             while True:

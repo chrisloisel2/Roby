@@ -62,8 +62,15 @@ Renseigne l'IP de l'opérateur, soit dans `config/robot_zenoh.json5`, soit via
 la variable d'environnement `OPERATOR_IP` (prioritaire) :
 
 ```bash
-OPERATOR_IP=192.168.15.107 python robot/robot_agent.py
+OPERATOR_IP=100.123.136.106 python robot/robot_agent.py
 ```
+
+`zenohd` écoute sur `0.0.0.0:7447` (voir `config/router.json5`), donc
+n'importe quelle IP joignable du PC opérateur fonctionne : IP locale
+(192.168.x, plus faible latence si les deux PC sont sur le même LAN) ou IP
+**Tailscale** (100.x, quand robot et opérateur ne sont pas sur le même
+réseau — cas actuel, IP par défaut ci-dessus). `tailscale ip -4` sur le PC
+opérateur donne l'IP à utiliser si elle change.
 
 ## Démarrage
 
@@ -72,39 +79,51 @@ OPERATOR_IP=192.168.15.107 python robot/robot_agent.py
 scripts/start_operator.sh          # zenohd + web_server + input_agent
 
 # PC robot
-OPERATOR_IP=192.168.15.107 scripts/start_robot.sh
+OPERATOR_IP=100.123.136.106 scripts/start_robot.sh
 ```
 
-## Robot réel : pont vers phd_mobile_base (ROS 2)
+## Robot réel : pilotage moteur direct (sans ROS 2)
 
-Sur le robot actuel, la base mobile est pilotée par un projet ROS 2 distinct
-et déjà existant : `~/02_RosBaseMobile/phd_mobile_base` (skid-steer 4 roues
-DAMIAO DM-2325, machine d'états de sécurité `DISABLED/ENABLED/ESTOP/FAULT`).
-**C'est ce projet, pas `robot/robot_agent.py` de ce dépôt, qui pilote
-réellement le robot.**
+`robot_agent.py` pilote directement les 4 moteurs mecanum DAMIAO DMS2325 via
+le SDK vendor `dmcan`/`damiao` (USB-CAN, libusb) — **pas de ROS 2**. C'est le
+même chemin, validé sur ce matériel par un vrai test de rotation (feedback
+mesuré conforme à la commande), que
+`~/catkin_ws/u2canfd/mecanum_control.py` sur le robot.
 
-`robot_agent.py` reste un gabarit générique (utile pour un robot sans stack
-ROS 2 existante, ou pour un futur sous-système type bras/mât). Pour la base
-mobile de ce robot, le pont Zenoh↔ROS 2 est un nœud dédié,
-`zenoh_bridge_node`, ajouté dans le paquet `phd_mobile_base` (voir son
-propre README, section « Téléopération réseau (Zenoh) »). **Ne pas lancer
-`robot_agent.py` en même temps que `zenoh_bridge_node`** : les deux
-publient sur les mêmes clés `robot/heartbeat` / `robot/state`.
+`robot/damiao.py` (SDK modifié : type moteur `DMS2325` ajouté) et
+`robot/dlls/libdm_device.so` (lib native) sont vendorisés dans ce dépôt —
+pas besoin d'un projet externe sur le robot. `dmcan_sdk` et `pyusb` viennent
+de pip (voir `requirements.txt`).
+
+Le contrat `robot/cmd/base` est mixé en cinématique mecanum (`vx`=avant,
+`vy`=latéral, `wz`=rotation, chacun normalisé `[-1, 1]`) puis mis à l'échelle
+par `MAX_VEL`/`ROT_VEL` (rad/s roue, réglés empiriquement sur ce robot —
+pas une conversion physique m/s, le rayon de roue n'a jamais été mesuré
+fiablement). `robot/cmd/stop` déclenche un `disable_all()` matériel immédiat
+(verrouillé) ; `robot/cmd/reset` lève le verrou et réactive les moteurs (le
+homme-mort reste requis pour bouger réellement).
+
+> **Bug connu, sans risque** : `Motor_Control.close()` /
+> `DmCanContext.__del__` plantent le process (assertion libusb dans la lib
+> native) — mais toujours *après* que `disable_all()` ait réussi. Le
+> `finally` de `main()` appelle `disable_all()` puis `os._exit(0)` pour
+> sauter ce nettoyage bugué plutôt que d'appeler `close()`.
 
 ```bash
-# Sur le PC robot, après colcon build --symlink-install :
-source /opt/ros/lyrical/setup.bash
-source ~/ros2_ws/install/setup.bash
+# Sur le PC robot :
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install eclipse-zenoh dmcan_sdk pyusb
 export OPERATOR_IP=<ip_pc_operateur>
-ros2 launch phd_mobile_base simulation.launch.py &   # ou bringup.launch.py pour le matériel
-~/02_RosBaseMobile/.venv-zenoh/bin/python3 -m phd_mobile_base.nodes.zenoh_bridge_node
+.venv/bin/python3 robot/robot_agent.py
 ```
 
-`camera_pub.py` de ce dépôt fonctionne tel quel avec la caméra USB branchée
-sur ce robot (`/dev/video0`, HSTD USB3.0). Ne pas forcer `CAP_PROP_FPS` via
-`cap.set()` : cette caméra ne l'expose pas nativement à 640×480 et ça casse
-la pipeline GStreamer (`isOpened()` devient `False`) — le débit ~15 FPS est
-donc limité côté logiciel (`time.sleep`), pas via la propriété caméra.
+`camera_pub.py` de ce dépôt fonctionne avec la caméra USB branchée sur ce
+robot (HSTD USB3.0). Deux pièges rencontrés, tous deux déjà corrigés dans le
+code : ne pas forcer `CAP_PROP_FPS` via `cap.set()` (casse la pipeline
+GStreamer sur cette caméra — le débit ~15 FPS est donc limité côté logiciel
+via `time.sleep`), et l'index `/dev/videoN` n'est pas fiable d'un boot à
+l'autre (renumérotation USB) — `camera_pub.py` sonde et retient
+automatiquement le premier index qui délivre une vraie frame.
 
 Interface web : `http://IP_DU_PC_OPERATEUR:8080`
 
@@ -148,39 +167,36 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 | `robot/cmd/base`             | ->   | `{"vx","vy","wz"}` normalisés `[-1, 1]`   |
 | `robot/cmd/arm`              | ->   | `{"joints":[...], "gripper", "mode"}`     |
 | `robot/cmd/stop`             | ->   | arrêt d'urgence (latch)                   |
-| `robot/cmd/reset`            | ->   | réarme après ESTOP/FAULT (jamais auto-enable) |
+| `robot/cmd/reset`            | ->   | lève le verrou E-stop + réactive les moteurs (deadman toujours requis pour bouger) |
 | `operator/deadman`           | ->   | `"true"` / `"false"`                      |
 | `robot/heartbeat`            | <-   | vivacité robot (~5 Hz)                    |
-| `robot/state`                | <-   | état robot (schéma dépend du récepteur : voir ci-dessous) |
+| `robot/state`                | <-   | `{moving, estop, deadman_ok, fresh_cmd, ts}` |
 | `robot/camera/front/jpeg`    | <-   | image JPEG                                |
 
-Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur. Qui applique les
-limites physiques dépend du récepteur : `robot_agent.py` générique
-(`MAX_LINEAR`/`MAX_ANGULAR`) ou, sur ce robot, `command_mux_node` de
-phd_mobile_base (`max_linear_speed`/`max_angular_speed` dans son
-`robot.yaml`). Le schéma JSON de `robot/state` diffère aussi selon la
-source : `{moving, estop, deadman_ok, fresh_cmd}` pour `robot_agent.py`
-générique, ou `{state, reason, command_timeout, motion_allowed}` (le FSM
-réel `DISABLED/ENABLED/ESTOP/FAULT`) via `zenoh_bridge_node`. L'UI web
-affiche ce second schéma.
+Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur ; `robot_agent.py`
+le mixe en cinématique mecanum puis met à l'échelle par `MAX_VEL`/`ROT_VEL`
+(rad/s roue) avant d'envoyer les trames MIT aux 4 moteurs.
 
 ## Sécurité
 
 Le **watchdog est local au PC robot** (`robot_agent.py`) et ne dépend jamais du
-web server. Le robot est mis à l'arrêt si :
+web server. Le robot est mis à l'arrêt (vitesse roue nulle, moteurs actifs) si :
 
 - le deadman n'est pas `"true"` et récent (`DEADMAN_TIMEOUT_SEC`) ;
 - aucune commande base fraîche (`CMD_TIMEOUT_SEC`) — couvre la perte réseau ;
-- un `robot/cmd/stop` a été reçu (E-stop verrouillé, nécessite un redémarrage).
+- un `robot/cmd/stop` a été reçu — **verrouillé** : `disable_all()` matériel
+  immédiat, moteurs désactivés jusqu'à `robot/cmd/reset` (ou redémarrage).
 
-Vitesses bornées côté robot (`MAX_LINEAR` / `MAX_ANGULAR`). Avant tout essai
-réel : ajouter un **arrêt d'urgence physique** en plus de ces protections
-logicielles.
+Vitesses bornées côté robot (`MAX_VEL`/`ROT_VEL` dans `robot_agent.py`).
+Avant tout essai réel : ajouter un **arrêt d'urgence physique** en plus de
+ces protections logicielles.
 
 ## Notes / limites
 
-- `robot_agent.py` et `camera_pub.py` contiennent des `TODO` : branche ton
-  driver robot réel dans `apply_base_command`, `apply_arm_command`, `stop_robot`.
+- Pas de bras/mât/pince sur ce robot : `apply_arm_command`/
+  `apply_gripper_command` dans `robot_agent.py` restent des points
+  d'extension documentés (no-op), pas des TODO à combler pour que la base
+  fonctionne.
 - GELLO : implémente `read_gello()` dans un module `gello_reader.py` importable
   par `input_agent.py` (renvoie un dict `joints`/`gripper`/`mode`, ou `None`).
 - Caméra en JPEG/Zenoh = MVP 10–20 FPS en 640×480. Pour de la basse latence

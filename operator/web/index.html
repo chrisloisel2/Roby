@@ -389,11 +389,9 @@
     });
 
     // ---- Status (robot heartbeat + reported state) ----
-    // state.state is the real safety FSM: DISABLED / ENABLED / ESTOP / FAULT
-    // (see phd_mobile_base safety_node — /mobile_base/safety_state).
+    // state schema published by robot/robot_agent.py:
+    //   {moving, estop, deadman_ok, fresh_cmd, ts}
     let robotState = {};
-    const FSM_LABEL = { DISABLED: 'DÉSACTIVÉ', ENABLED: 'ACTIVÉ', ESTOP: 'ARRÊT URGENCE', FAULT: 'DÉFAUT' };
-    const FSM_STATUS = { DISABLED: 'warning', ENABLED: 'good', ESTOP: 'critical', FAULT: 'critical' };
     const setTile = (id, status, text) => {
       const t = $(id); t.dataset.s = status;
       t.querySelector(".v span:last-child").textContent = text;
@@ -404,14 +402,17 @@
       setTile("t-robot", s.robot ? "good" : "critical", s.robot ? "ACTIF" : "PERDU");
       $("brandDot").style.background = s.robot ? "var(--good)" : "var(--critical)";
 
-      const fsm = robotState.state || null;
-      const stopped = fsm === "ESTOP" || fsm === "FAULT";
-      $("banner").classList.toggle("show", stopped);
-      $("banner").textContent = stopped
-        ? `⚠ ${FSM_LABEL[fsm]} — ${robotState.reason || ''} — cliquer RÉARMER puis ré-activer le homme-mort`
+      const estop = !!robotState.estop;
+      $("banner").classList.toggle("show", estop);
+      $("banner").textContent = estop
+        ? "⚠ ARRÊT D'URGENCE ACTIF — cliquer RÉARMER puis ré-activer le homme-mort"
         : '';
-      setTile("t-fsm", FSM_STATUS[fsm] || "warning", fsm ? FSM_LABEL[fsm] : "—");
-      $("reasonLine").textContent = robotState.reason ? `Raison : ${robotState.reason}` : '';
+      setTile("t-fsm",
+        estop ? "critical" : (robotState.moving ? "good" : "warning"),
+        estop ? "E-STOP" : (robotState.moving ? "EN MOUVEMENT" : "ARRÊT"));
+      $("reasonLine").textContent = (!estop && !robotState.moving)
+        ? `homme-mort : ${robotState.deadman_ok ? "oui" : "non"} · commande : ${robotState.fresh_cmd ? "fraîche" : "périmée"}`
+        : '';
     });
 
     // ---- Connection badge (server link) ----
