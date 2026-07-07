@@ -19,6 +19,7 @@ both publish to the same command topics.
 """
 import asyncio
 import json
+import threading
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -67,6 +68,24 @@ def on_camera(sample):
         _loop.call_soon_threadsafe(_notify_camera_clients)
 
 
+def _camera_pull_loop(sub) -> None:
+    """Drain the ring-buffer subscriber and process each sample.
+
+    Declared with handlers.RingChannel(1) (see lifespan below) instead of a
+    plain push callback: under a network stall (this Mac's WiFi link to the
+    robot is shared with the robot on a congested 2.4GHz extender, measured
+    stalls up to ~900ms), several frames build up in transit and arrive back
+    to back once it clears. A plain callback fires once per queued sample --
+    decoding and copying every one of them even though only the last is ever
+    still relevant, right when the system is already catching up. A ring
+    buffer of capacity 1 drops every superseded sample as soon as a newer one
+    lands, at the Zenoh layer, before any of that work happens: draining it
+    can only ever yield the single most recent frame.
+    """
+    for sample in sub:
+        on_camera(sample)
+
+
 def on_heartbeat(_sample):
     global _heartbeat_ts
     _heartbeat_ts = time.time()
@@ -92,7 +111,10 @@ async def lifespan(_app: FastAPI):
     global _loop
     _loop = asyncio.get_running_loop()
     session = zenoh.open(zenoh.Config.from_file(str(CONFIG)))
-    session.declare_subscriber(CAMERA_KEY, on_camera)
+    camera_sub = session.declare_subscriber(
+        CAMERA_KEY, handler=zenoh.handlers.RingChannel(1)
+    )
+    threading.Thread(target=_camera_pull_loop, args=(camera_sub,), daemon=True).start()
     session.declare_subscriber(HEARTBEAT_KEY, on_heartbeat)
     session.declare_subscriber(STATE_KEY, on_state)
     Z["session"] = session

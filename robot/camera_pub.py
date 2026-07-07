@@ -29,6 +29,11 @@ KEY = "robot/camera/front/jpeg"
 WIDTH, HEIGHT, FPS = 640, 480, 30
 JPEG_QUALITY = 70
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
+# Diagnostic only, off by default: burns the robot's wall-clock time into
+# each frame so true end-to-end (capture-to-screen) latency can be measured
+# by comparing it against the viewer's clock -- catches latency hidden
+# inside the camera's own firmware/driver that per-stage timing can't see.
+DEBUG_TIMESTAMP = os.environ.get("DEBUG_TIMESTAMP", "0") == "1"
 
 
 def load_config() -> zenoh.Config:
@@ -99,17 +104,34 @@ def main() -> None:
         try:
             next_tick = time.monotonic()
             while True:
+                t_read0 = time.monotonic()
                 ok, frame = cap.read()
+                read_ms = (time.monotonic() - t_read0) * 1000
+                if read_ms > 100:
+                    print(f"[camera_pub] cap.read() stalled: {read_ms:.0f}ms (ok={ok})", flush=True)
                 if not ok:
+                    print("[camera_pub] cap.read() returned ok=False, retrying in 0.1s", flush=True)
                     time.sleep(0.1)
                     next_tick = time.monotonic()
                     continue
 
+                if DEBUG_TIMESTAMP:
+                    cv2.putText(frame, f"{time.time():.3f}", (10, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 2, cv2.LINE_AA)
+
+                t_enc0 = time.monotonic()
                 ok, jpg = cv2.imencode(
                     ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
                 )
+                enc_ms = (time.monotonic() - t_enc0) * 1000
+                if enc_ms > 60:
+                    print(f"[camera_pub] cv2.imencode() stalled: {enc_ms:.0f}ms", flush=True)
                 if ok:
+                    t_pub0 = time.monotonic()
                     pub.put(jpg.tobytes())
+                    pub_ms = (time.monotonic() - t_pub0) * 1000
+                    if pub_ms > 60:
+                        print(f"[camera_pub] pub.put() stalled: {pub_ms:.0f}ms", flush=True)
 
                 # Pace by a fixed deadline instead of a flat sleep: if this
                 # iteration ran long (slow encode/publish), don't add a full
