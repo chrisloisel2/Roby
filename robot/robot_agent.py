@@ -68,8 +68,19 @@ KD = 3.0
 MAX_VEL = 60.0   # rad/s -- translation wheel-speed scale (empirically tuned)
 ROT_VEL = 50.0   # rad/s -- rotation wheel-speed scale (empirically tuned)
 
+# Brief exponential ramp toward whatever target is being sent -- a real
+# command (apply_base_command) or zero (stop_robot) -- instead of snapping
+# straight there. Protects the gearbox from a hard step in either direction.
+# Kept short on purpose so it doesn't reintroduce the sluggish, "underpowered"
+# feel a much longer ramp (0.45s) had before: this is just enough to take the
+# edge off a sudden full-speed start or stop, not a noticeable ramp.
+RAMP_HALFLIFE = 0.12    # s -- both accel and decel
+VEL_SNAP_ZERO = 0.3     # rad/s -- snap to exact 0 below this (decay is asymptotic)
+
 _ctrl: Motor_Control | None = None
 _motors: list | None = None
+_smoothed = [0.0, 0.0, 0.0, 0.0]  # per-wheel [FR, FL, RL, RR], post-INVERT
+_last_tick: float | None = None
 
 
 def load_config() -> zenoh.Config:
@@ -126,28 +137,40 @@ def _mecanum_targets(vx: float, vy: float, wz: float) -> list[float]:
     return [tx - ty - tz, tx + ty + tz, tx - ty + tz, tx + ty - tz]
 
 
-def stop_robot() -> None:
-    # Idempotent, safe every control tick: hold zero velocity (motors stay
-    # enabled). Called whenever `moving` is False for any reason (deadman
-    # released, stale command). See on_stop() for the harder E-stop path.
+def _drive(vx: float, vy: float, wz: float) -> None:
+    """Ramp each wheel toward its raw mecanum target and send it. Shared by
+    apply_base_command (real target) and stop_robot (target = zero) so both
+    a sudden start and a sudden stop get the same brief, protective ramp."""
+    global _last_tick
     if _ctrl is None or _motors is None:
         return
-    for motor in _motors:
+    now = time.time()
+    dt = max(now - _last_tick, 1e-6) if _last_tick is not None else CONTROL_PERIOD
+    _last_tick = now
+    decay = 0.5 ** (dt / RAMP_HALFLIFE)
+
+    targets = _mecanum_targets(vx, vy, wz)
+    for i, (motor, target, inv) in enumerate(zip(_motors, targets, INVERT)):
+        goal = target * inv
+        _smoothed[i] = goal + (_smoothed[i] - goal) * decay
+        if abs(_smoothed[i]) < VEL_SNAP_ZERO:
+            _smoothed[i] = 0.0
         try:
-            _ctrl.control_mit(motor, 0.0, KD, 0.0, 0.0, 0.0)
+            _ctrl.control_mit(motor, 0.0, KD, 0.0, _smoothed[i], 0.0)
         except Exception as exc:
-            print(f"[stop_robot] control_mit failed: {exc}")
+            print(f"[_drive] control_mit failed: {exc}")
+
+
+def stop_robot() -> None:
+    # Idempotent, safe every control tick: ramp down to zero (RAMP_HALFLIFE)
+    # rather than snapping, then hold. Called whenever `moving` is False for
+    # any reason (deadman released, stale command). See on_stop() for the
+    # harder, instant E-stop path (disable_all()).
+    _drive(0.0, 0.0, 0.0)
 
 
 def apply_base_command(vx: float, vy: float, wz: float) -> None:
-    if _ctrl is None or _motors is None:
-        return
-    targets = _mecanum_targets(vx, vy, wz)
-    for motor, target, inv in zip(_motors, targets, INVERT):
-        try:
-            _ctrl.control_mit(motor, 0.0, KD, 0.0, target * inv, 0.0)
-        except Exception as exc:
-            print(f"[apply_base_command] control_mit failed: {exc}")
+    _drive(vx, vy, wz)
 
 
 def apply_arm_command(_cmd: dict) -> None:
@@ -217,6 +240,7 @@ def on_reset(_sample) -> None:
     # required to move" rather than any auto-resume.
     with state.lock:
         state.estop = False
+    _smoothed[:] = [0.0, 0.0, 0.0, 0.0]  # belt-and-suspenders: no stale ramp state
     if _ctrl is not None:
         try:
             _ctrl.enable_all()
