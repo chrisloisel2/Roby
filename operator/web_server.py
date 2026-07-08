@@ -11,7 +11,7 @@ Endpoints
 ---------
 GET  /             the operator UI (operator/web/index.html)
 WS   /ws/camera    server -> browser : binary JPEG frames
-WS   /ws/status    server -> browser : robot heartbeat, reported state, fps
+WS   /ws/status    server -> browser : robot heartbeat, reported state, fps, arm state
 WS   /ws/control   browser -> server : {type: base|deadman|stop|reset|gripper}
 
 Note: run ONE operator input source at a time (this web UI OR input_agent.py) —
@@ -35,6 +35,7 @@ CONFIG = Path(__file__).resolve().parent.parent / "config" / "operator_zenoh.jso
 CAMERA_KEY = "robot/camera/front/jpeg"
 HEARTBEAT_KEY = "robot/heartbeat"
 STATE_KEY = "robot/state"
+ARM_STATE_KEY = "robot/arm/state"
 STALE_AFTER = 1.0  # seconds without data => considered lost
 
 # --- Shared state (written by Zenoh callbacks, read by WS coroutines) --------
@@ -42,6 +43,7 @@ _frame = {"data": None, "ts": 0.0}
 _frame_times = deque(maxlen=30)
 _heartbeat_ts = 0.0
 _robot_state = {}
+_arm_state = {}
 
 # --- Zenoh handles, populated on startup -------------------------------------
 Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None}
@@ -88,6 +90,14 @@ def on_state(sample):
         pass
 
 
+def on_arm_state(sample):
+    global _arm_state
+    try:
+        _arm_state = json.loads(sample.payload.to_bytes().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        pass
+
+
 def _fps() -> float:
     if len(_frame_times) < 2:
         return 0.0
@@ -103,6 +113,7 @@ async def lifespan(_app: FastAPI):
     session.declare_subscriber(CAMERA_KEY, on_camera)
     session.declare_subscriber(HEARTBEAT_KEY, on_heartbeat)
     session.declare_subscriber(STATE_KEY, on_state)
+    session.declare_subscriber(ARM_STATE_KEY, on_arm_state)
     Z["session"] = session
     Z["base"] = session.declare_publisher("robot/cmd/base")
     Z["stop"] = session.declare_publisher("robot/cmd/stop")
@@ -158,11 +169,17 @@ async def status_ws(ws: WebSocket):
     try:
         while True:
             now = time.time()
+            # _arm_state has no separate heartbeat topic (unlike robot/camera
+            # above): go stale/empty past STALE_AFTER using its own "ts"
+            # field instead, so a dead arm_agent.py doesn't leave the UI
+            # showing a frozen "connected" forever.
+            arm_fresh = bool(_arm_state) and (now - _arm_state.get("ts", 0)) < STALE_AFTER
             await ws.send_text(json.dumps({
                 "robot": (now - _heartbeat_ts) < STALE_AFTER,
                 "camera": (now - _frame["ts"]) < STALE_AFTER,
                 "fps": _fps(),
                 "state": _robot_state,
+                "arm": _arm_state if arm_fresh else {},
             }))
             await asyncio.sleep(0.2)
     except WebSocketDisconnect:

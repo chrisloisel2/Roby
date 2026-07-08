@@ -9,10 +9,14 @@ heartbeat, and supervision.
 
 Resolution note (2026-07-07): 1920x1080 and 1280x720 previously measured at
 5.0fps / 10.0fps on this camera (vs 29.9fps at 640x480 -- see git history),
-degraded by a failed mode negotiation. Back on 1920x1080 per request despite
-that; JPEG_QUALITY lowered to offset the larger frame size (~6.75x the
-pixels of 640x480) since resolution and compression are independent knobs --
-if fps regresses again, that prior measurement is why.
+degraded by a failed mode negotiation. CAPTURE stays at 1920x1080 despite
+that (kept per prior request, and changing it risks retriggering that same
+negotiation regression) -- but the frame actually encoded/published is
+downscaled to STREAM_WIDTH/STREAM_HEIGHT first (same aspect ratio, so FOV is
+unchanged), which is what actually cuts per-frame encode time and payload
+size. This -- capture-then-downscale, no artificial frame-rate cap, higher
+JPEG_QUALITY on the smaller frame, raw binary transport all the way to the
+browser -- mirrors a known-good low-latency reference pipeline.
 """
 import json
 import os
@@ -23,9 +27,9 @@ import cv2
 import zenoh
 
 KEY = "robot/camera/front/jpeg"
-WIDTH, HEIGHT, FPS = 1920, 1080, 30
-JPEG_QUALITY = 40  # lowered from 40 (2026-07-07) to cut per-frame size/latency
-                    # further without touching WIDTH/HEIGHT (FOV unchanged)
+WIDTH, HEIGHT = 1920, 1080
+STREAM_WIDTH, STREAM_HEIGHT = 960, 540  # same 16:9 aspect as WIDTH/HEIGHT -> FOV unchanged
+JPEG_QUALITY = 80  # safe to keep high: applied to the downscaled stream frame, not the full capture
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
 # Physical mount: was upside-down, corrected by ROTATE_180 (image confirmed
 # upright). Camera remounted inverted again (2026-07-07) -- that 180° flip
@@ -60,7 +64,7 @@ def open_camera(camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
     """
     candidates = [camera_id] if camera_id is not None else range(MAX_PROBE_INDEX + 1)
     for idx in candidates:
-        cap = cv2.VideoCapture(idx)
+        cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
         if cap.isOpened():
             ok, _ = cap.read()
             if ok:
@@ -98,13 +102,13 @@ def main() -> None:
         # backend) requesting an explicit fps the camera doesn't natively
         # expose at this resolution breaks pipeline renegotiation entirely
         # (isOpened() becomes False). We instead read at the camera's native
-        # rate and throttle publishing below via frame_period.
-
-        frame_period = 1.0 / FPS
+        # rate, with no artificial cap on the publish side either -- Zenoh's
+        # DROP + express congestion control (above) already discards a stale
+        # frame under backpressure instead of queueing it, so there's nothing
+        # for an extra frame_period throttle here to protect against.
         print(f"camera_pub streaming camera {camera_id} on '{KEY}'")
 
         try:
-            next_tick = time.monotonic()
             while True:
                 t_read0 = time.monotonic()
                 ok, frame = cap.read()
@@ -114,11 +118,12 @@ def main() -> None:
                 if not ok:
                     print("[camera_pub] cap.read() returned ok=False, retrying in 0.1s", flush=True)
                     time.sleep(0.1)
-                    next_tick = time.monotonic()
                     continue
 
                 if ROTATE is not None:
                     frame = cv2.rotate(frame, ROTATE)
+
+                frame = cv2.resize(frame, (STREAM_WIDTH, STREAM_HEIGHT))
 
                 if DEBUG_TIMESTAMP:
                     cv2.putText(frame, f"{time.time():.3f}", (10, 40),
@@ -137,20 +142,6 @@ def main() -> None:
                     pub_ms = (time.monotonic() - t_pub0) * 1000
                     if pub_ms > 60:
                         print(f"[camera_pub] pub.put() stalled: {pub_ms:.0f}ms", flush=True)
-
-                # Pace by a fixed deadline instead of a flat sleep: if this
-                # iteration ran long (slow encode/publish), don't add a full
-                # frame_period on top of that overrun, and don't try to burst
-                # extra frames to catch up either — just resync to "now" and
-                # keep going. A flat sleep-after-work compounds any overrun
-                # frame after frame, which is how latency creeps upward over
-                # time instead of staying flat.
-                next_tick += frame_period
-                delay = next_tick - time.monotonic()
-                if delay > 0:
-                    time.sleep(delay)
-                else:
-                    next_tick = time.monotonic()
         except KeyboardInterrupt:
             pass
         finally:

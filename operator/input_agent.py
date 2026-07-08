@@ -124,6 +124,16 @@ def main() -> None:
                 pygame.event.pump()
                 deadman = bool(joy.get_button(DEADMAN_BUTTON))
 
+                # GELLO arm teleop is intentionally independent of the base's
+                # joystick deadman -- operating a 7-DOF leader arm needs both
+                # hands, so requiring the joystick button held at the same
+                # time isn't workable. Safety for the arm instead comes from
+                # the robot-side watchdog on robot/cmd/arm freshness.
+                gello = read_gello()
+                if gello is not None:
+                    gello["ts"] = time.time()
+                    pub_arm.put(json.dumps(gello))
+
                 if not deadman:
                     pub_base.put(json.dumps({"vx": 0.0, "vy": 0.0, "wz": 0.0}))
                     pub_deadman.put("false")
@@ -140,11 +150,6 @@ def main() -> None:
                 pub_base.put(json.dumps(base_cmd))
                 pub_joystick.put(json.dumps(base_cmd))
                 print(f"\r{label:16s} vx={vx:+.2f} vy={vy:+.2f} wz={wz:+.2f}   ", end="")
-
-                gello = read_gello()
-                if gello is not None:
-                    gello["ts"] = time.time()
-                    pub_arm.put(json.dumps(gello))
 
                 time.sleep(PUBLISH_PERIOD)
         except KeyboardInterrupt:

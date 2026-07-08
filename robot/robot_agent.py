@@ -22,11 +22,17 @@ robot/cmd/base    JSON {"vx","vy","wz"}, each normalized to [-1, 1].
                   robot, matching mecanum_control.py -- not a physical
                   m/s/rad/s unit conversion; wheel radius was never reliably
                   measured, see catkin_ws/u2canfd/CLAUDE.md).
-robot/cmd/arm     JSON {"joints":[...], "gripper": float, "mode": str}
-                  -- no arm/mast hardware exists yet: no-op, kept as a
-                  documented extension point.
-robot/cmd/gripper JSON {"gripper": float in [0, 1]} -- no gripper hardware
-                  yet: no-op, kept as a documented extension point.
+robot/cmd/arm     JSON {"joints": {name: deg, ...}, "gripper": float, "mode": str}
+                  -- the reBot B601 arm is driven by a SEPARATE process,
+                  arm_agent.py (its own Zenoh subscriptions, its own
+                  freshness watchdog, running in the `lerobot` conda env --
+                  see README). apply_arm_command/apply_gripper_command below
+                  stay no-op here on purpose: this process must not also try
+                  to drive the same motors.
+robot/cmd/gripper JSON {"gripper": float in [0, 1]} -- no-op here for the
+                  same reason (see robot/cmd/arm above); still a documented
+                  extension point if a gripper is ever driven independently
+                  of the arm.
 robot/cmd/stop    Any payload -> latching emergency stop (requires restart).
                   Edge-triggered hard motor disable_all(), matching the
                   proven emergency-stop behavior in mecanum_control.py.
@@ -174,11 +180,11 @@ def apply_base_command(vx: float, vy: float, wz: float) -> None:
 
 
 def apply_arm_command(_cmd: dict) -> None:
-    pass  # No arm/mast hardware yet -- extension point.
+    pass  # Arm is driven by the separate arm_agent.py process -- see module docstring.
 
 
 def apply_gripper_command(_value: float) -> None:
-    pass  # No gripper hardware yet -- extension point.
+    pass  # Arm is driven by the separate arm_agent.py process -- see module docstring.
 
 
 def _clamp(value: float, limit: float) -> float:

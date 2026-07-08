@@ -1,769 +1,1314 @@
 <!doctype html>
 <html lang="fr">
+
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Roby · Téléopération</title>
-  <style>
-    :root {
-      --plane:      #0d0d0d;
-      --surface:    #1a1a19;
-      --surface-2:  #232321;
-      --ink:        #ffffff;
-      --ink-2:      #c3c2b7;
-      --muted:      #898781;
-      --hairline:   rgba(255,255,255,0.10);
-      --hairline-2: rgba(255,255,255,0.06);
-      --accent:     #3987e5;
-      --good:       #0ca30c;
-      --warning:    #fab219;
-      --critical:   #d03b3b;
-      --vx:         #3987e5;  /* avant/arrière */
-      --vy:         #199e70;  /* latéral */
-      --wz:         #9085e9;  /* rotation */
-      --radius:     12px;
-      --gap:        14px;
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body {
-      margin: 0; background: var(--plane); color: var(--ink);
-      -webkit-font-smoothing: antialiased; overflow: hidden;
-    }
-    .app {
-      display: grid; height: 100vh;
-      grid-template-rows: auto 1fr;
-    }
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+	<title>Roby · Téléopération</title>
+	<style>
+		:root {
+			--plane: #0d0d0d;
+			--surface: #1a1a19;
+			--surface-2: #232321;
+			--ink: #ffffff;
+			--ink-2: #c3c2b7;
+			--muted: #898781;
+			--hairline: rgba(255, 255, 255, 0.10);
+			--hairline-2: rgba(255, 255, 255, 0.06);
+			--accent: #3987e5;
+			--good: #0ca30c;
+			--warning: #fab219;
+			--critical: #d03b3b;
+			--vx: #3987e5;
+			/* avant/arrière */
+			--vy: #199e70;
+			/* latéral */
+			--wz: #9085e9;
+			/* rotation */
+			--radius: 12px;
+			--gap: 14px;
+			font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+		}
 
-    /* ---------- Header ---------- */
-    header {
-      display: flex; align-items: center; gap: 16px;
-      padding: 12px 18px; border-bottom: 1px solid var(--hairline);
-      background: var(--surface);
-    }
-    .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: .2px; }
-    .brand .dot {
-      width: 10px; height: 10px; border-radius: 50%; background: var(--good);
-      box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent);
-    }
-    .brand small { color: var(--muted); font-weight: 500; }
-    .header-spacer { flex: 1; }
-    .conn {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline);
-      background: var(--surface-2); font-size: 13px; color: var(--ink-2);
-      font-variant-numeric: tabular-nums;
-    }
-    .conn .led { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-    .conn.live .led { background: var(--good); box-shadow: 0 0 8px var(--good); }
-    .conn.down .led { background: var(--critical); }
-    .clock { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+		* {
+			box-sizing: border-box;
+		}
 
-    /* ---------- Main grid ---------- */
-    main {
-      display: grid; gap: var(--gap); padding: var(--gap);
-      grid-template-columns: minmax(0, 1fr) 340px;
-      grid-template-rows: minmax(0, 1fr) auto;
-      grid-template-areas: "video side" "tele side";
-      min-height: 0;
-    }
-    .panel {
-      background: var(--surface); border: 1px solid var(--hairline);
-      border-radius: var(--radius); min-height: 0;
-    }
-    .panel-title {
-      display: flex; align-items: center; gap: 8px;
-      font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
-      color: var(--muted); padding: 12px 14px 0;
-    }
+		html,
+		body {
+			height: 100%;
+		}
 
-    /* ---------- Video ---------- */
-    .video { grid-area: video; position: relative; overflow: hidden; background: #000; }
-    .video img {
-      position: absolute; inset: 0; width: 100%; height: 100%;
-      object-fit: contain; display: block;
-    }
-    .video .chips { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; }
-    .chip {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 5px 10px; border-radius: 8px; font-size: 12px;
-      background: #000a; backdrop-filter: blur(4px); color: var(--ink-2);
-      font-variant-numeric: tabular-nums; border: 1px solid var(--hairline-2);
-    }
-    .chip b { color: var(--ink); font-weight: 600; }
-    .rec { position: absolute; top: 12px; right: 12px; display:flex; align-items:center; gap:6px;
-           font-size:12px; color: var(--ink-2); background:#000a; padding:5px 10px; border-radius:8px; }
-    .rec .dot { width:8px; height:8px; border-radius:50%; background: var(--critical); animation: pulse 1.4s infinite; }
-    .noSignal {
-      position: absolute; inset: 0; display: none; flex-direction: column;
-      align-items: center; justify-content: center; gap: 10px;
-      color: var(--muted); background: repeating-linear-gradient(45deg,#0e0e0e,#0e0e0e 12px,#111 12px,#111 24px);
-    }
-    .noSignal.show { display: flex; }
-    .noSignal .big { font-size: 15px; letter-spacing: .18em; color: var(--ink-2); }
-    .noSignal .sub { font-size: 12px; }
+		body {
+			margin: 0;
+			background: var(--plane);
+			color: var(--ink);
+			-webkit-font-smoothing: antialiased;
+			overflow: hidden;
+		}
 
-    /* ---------- Telemetry ---------- */
-    .tele { grid-area: tele; padding-bottom: 14px; }
-    .meters { display: grid; gap: 12px; padding: 10px 16px 4px; }
-    .meter { display: grid; grid-template-columns: 92px 1fr 64px; align-items: center; gap: 12px; }
-    .meter .lbl { font-size: 13px; color: var(--ink-2); }
-    .meter .lbl small { display:block; color: var(--muted); font-size: 11px; }
-    .track {
-      position: relative; height: 10px; border-radius: 6px;
-      background: var(--surface-2); overflow: hidden;
-    }
-    .track::before { /* center baseline */
-      content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
-      background: var(--hairline); transform: translateX(-1px);
-    }
-    .track .fill {
-      position: absolute; top: 0; bottom: 0; border-radius: 6px;
-      transition: width .05s linear, left .05s linear;
-    }
-    .meter .val { text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--ink); }
+		.app {
+			display: grid;
+			height: 100vh;
+			grid-template-rows: auto 1fr;
+		}
 
-    /* ---------- Side column ---------- */
-    .side { grid-area: side; display: grid; grid-template-rows: auto auto 1fr; gap: var(--gap); min-height: 0; }
-    .side > .panel { display: flex; flex-direction: column; }
+		/* ---------- Header ---------- */
+		header {
+			display: flex;
+			align-items: center;
+			gap: 16px;
+			padding: 12px 18px;
+			border-bottom: 1px solid var(--hairline);
+			background: var(--surface);
+		}
 
-    /* Safety */
-    .safety { padding: 14px; display: grid; gap: 12px; }
-    .estop {
-      appearance: none; border: none; cursor: pointer; width: 100%;
-      padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 750; letter-spacing: .12em;
-      color: #fff; background: var(--critical);
-      box-shadow: 0 0 0 4px color-mix(in srgb, var(--critical) 22%, transparent), inset 0 -3px 0 #0004;
-      transition: transform .05s;
-    }
-    .estop:active { transform: translateY(1px); }
-    .reset {
-      appearance: none; border: 1px solid var(--hairline); cursor: pointer; width: 100%;
-      padding: 11px; border-radius: 10px; font-size: 13px; font-weight: 650; letter-spacing: .06em;
-      color: var(--ink-2); background: var(--surface-2); transition: all .08s;
-    }
-    .reset:hover { color: var(--ink); border-color: var(--accent); }
-    .reset:active { transform: translateY(1px); }
-    .reason { padding: 0 14px 12px; font-size: 12px; color: var(--muted); min-height: 1.2em; }
-    .deadman {
-      appearance: none; cursor: pointer; width: 100%; padding: 13px; border-radius: 10px;
-      font-size: 14px; font-weight: 650; letter-spacing: .06em; user-select: none;
-      color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--hairline);
-      transition: all .08s;
-    }
-    .deadman.armed { color: #06210a; background: var(--good); border-color: transparent;
-                     box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent); }
-    .deadman small { display:block; font-weight:500; font-size:11px; opacity:.8; margin-top:2px; }
+		.brand {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			font-weight: 650;
+			letter-spacing: .2px;
+		}
 
-    /* State tiles */
-    .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 14px 14px; }
-    .tile {
-      border: 1px solid var(--hairline); border-radius: 10px; padding: 11px 12px;
-      background: var(--surface-2); display: grid; gap: 4px;
-    }
-    .tile .k { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
-    .tile .v { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 650; }
-    .tile .v .ic { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
-    .tile[data-s="good"]     .v .ic { background: var(--good); box-shadow: 0 0 7px var(--good); }
-    .tile[data-s="good"]     .v { color: #7fe07f; }
-    .tile[data-s="warning"]  .v .ic { background: var(--warning); }
-    .tile[data-s="warning"]  .v { color: var(--warning); }
-    .tile[data-s="critical"] .v .ic { background: var(--critical); }
-    .tile[data-s="critical"] .v { color: #f08b8b; }
+		.brand .dot {
+			width: 10px;
+			height: 10px;
+			border-radius: 50%;
+			background: var(--good);
+			box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent);
+		}
 
-    /* Controls */
-    .controls { padding: 14px; display: grid; gap: 14px; overflow: auto; }
-    .dpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 220px; margin: 0 auto; }
-    .dpad button {
-      appearance: none; border: 1px solid var(--hairline); background: var(--surface-2);
-      color: var(--ink-2); border-radius: 10px; height: 46px; font-size: 18px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center; user-select: none;
-      transition: all .06s;
-    }
-    .dpad button:active, .dpad button.on { background: var(--accent); color: #fff; border-color: transparent; }
-    .dpad .empty { visibility: hidden; }
-    .dpad small { font-size: 9px; }
-    .row { display: grid; gap: 6px; }
-    .row label { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
-    .row label b { color: var(--ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
-    input[type=range] { width: 100%; accent-color: var(--accent); }
-    .hints { font-size: 11px; color: var(--muted); line-height: 1.7; }
-    .kbd { display:inline-block; padding: 1px 6px; border:1px solid var(--hairline); border-radius:5px;
-           background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-family: ui-monospace, monospace; }
+		.brand small {
+			color: var(--muted);
+			font-weight: 500;
+		}
 
-    /* Joystick */
-    .joy-head {
-      display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      cursor: pointer; user-select: none;
-    }
-    .joy-head .name {
-      color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px;
-    }
-    .joy-chevron { color: var(--muted); font-size: 11px; transition: transform .15s; }
-    .joy-chevron.open { transform: rotate(90deg); }
-    .joy-body { display: none; padding: 12px 14px 14px; gap: 10px; overflow: auto; }
-    .joy-body.open { display: grid; }
-    .joy-raw {
-      font-size: 10.5px; color: var(--muted); font-family: ui-monospace, monospace; line-height: 1.6;
-      background: var(--surface-2); border-radius: 8px; padding: 7px 9px; word-break: break-all;
-    }
-    .joy-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-    .joy-row .lbl { flex: 1; color: var(--ink-2); }
-    .joy-row .val { width: 60px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); font-size: 11px; }
-    .joy-row .inv { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
-    .joy-row .assign {
-      appearance: none; border: 1px solid var(--hairline); background: var(--surface-2); color: var(--ink-2);
-      border-radius: 7px; padding: 4px 9px; font-size: 11px; cursor: pointer; white-space: nowrap;
-    }
-    .joy-row .assign.listening { background: var(--accent); color: #fff; border-color: transparent; animation: pulse 1s infinite; }
-    .joy-reset {
-      appearance: none; border: 1px solid var(--hairline); background: none; color: var(--muted);
-      border-radius: 7px; padding: 6px; font-size: 11px; cursor: pointer; justify-self: start;
-    }
-    .joy-reset:hover { color: var(--ink-2); }
+		.header-spacer {
+			flex: 1;
+		}
 
-    /* E-stop banner */
-    .banner {
-      display: none; position: fixed; inset: 0 0 auto 0; z-index: 20;
-      padding: 12px; text-align: center; font-weight: 700; letter-spacing: .1em;
-      color: #fff; background: var(--critical); animation: pulse 1.2s infinite;
-    }
-    .banner.show { display: block; }
+		.conn {
+			display: inline-flex;
+			align-items: center;
+			gap: 8px;
+			padding: 6px 12px;
+			border-radius: 999px;
+			border: 1px solid var(--hairline);
+			background: var(--surface-2);
+			font-size: 13px;
+			color: var(--ink-2);
+			font-variant-numeric: tabular-nums;
+		}
 
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+		.conn .led {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: var(--muted);
+		}
 
-    /* ---------- Responsive ---------- */
-    @media (max-width: 900px) {
-      body { overflow: auto; }
-      .app { height: auto; }
-      main {
-        grid-template-columns: 1fr; grid-template-rows: none;
-        grid-template-areas: "video" "side" "tele"; height: auto;
-      }
-      .video { aspect-ratio: 4 / 3; }
-      .side { grid-template-rows: none; }
-    }
-  </style>
+		.conn.live .led {
+			background: var(--good);
+			box-shadow: 0 0 8px var(--good);
+		}
+
+		.conn.down .led {
+			background: var(--critical);
+		}
+
+		.clock {
+			color: var(--muted);
+			font-size: 13px;
+			font-variant-numeric: tabular-nums;
+		}
+
+		/* ---------- Main grid ---------- */
+		main {
+			display: grid;
+			gap: var(--gap);
+			padding: var(--gap);
+			grid-template-columns: minmax(0, 1fr) 340px;
+			grid-template-rows: minmax(0, 1fr) auto;
+			grid-template-areas: "video side" "tele side";
+			min-height: 0;
+		}
+
+		.panel {
+			background: var(--surface);
+			border: 1px solid var(--hairline);
+			border-radius: var(--radius);
+			min-height: 0;
+		}
+
+		.panel-title {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			font-size: 12px;
+			letter-spacing: .12em;
+			text-transform: uppercase;
+			color: var(--muted);
+			padding: 12px 14px 0;
+		}
+
+		/* ---------- Video ---------- */
+		.video {
+			grid-area: video;
+			position: relative;
+			overflow: hidden;
+			background: #000;
+		}
+
+		.video canvas {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+			object-fit: contain;
+			display: block;
+		}
+
+		.video .chips {
+			position: absolute;
+			top: 12px;
+			left: 12px;
+			display: flex;
+			gap: 8px;
+		}
+
+		.chip {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			padding: 5px 10px;
+			border-radius: 8px;
+			font-size: 12px;
+			background: #000a;
+			backdrop-filter: blur(4px);
+			color: var(--ink-2);
+			font-variant-numeric: tabular-nums;
+			border: 1px solid var(--hairline-2);
+		}
+
+		.chip b {
+			color: var(--ink);
+			font-weight: 600;
+		}
+
+		.rec {
+			position: absolute;
+			top: 12px;
+			right: 12px;
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			font-size: 12px;
+			color: var(--ink-2);
+			background: #000a;
+			padding: 5px 10px;
+			border-radius: 8px;
+		}
+
+		.rec .dot {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: var(--critical);
+			animation: pulse 1.4s infinite;
+		}
+
+		.noSignal {
+			position: absolute;
+			inset: 0;
+			display: none;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			gap: 10px;
+			color: var(--muted);
+			background: repeating-linear-gradient(45deg, #0e0e0e, #0e0e0e 12px, #111 12px, #111 24px);
+		}
+
+		.noSignal.show {
+			display: flex;
+		}
+
+		.noSignal .big {
+			font-size: 15px;
+			letter-spacing: .18em;
+			color: var(--ink-2);
+		}
+
+		.noSignal .sub {
+			font-size: 12px;
+		}
+
+		/* ---------- Telemetry ---------- */
+		.tele {
+			grid-area: tele;
+			padding-bottom: 14px;
+		}
+
+		.meters {
+			display: grid;
+			gap: 12px;
+			padding: 10px 16px 4px;
+		}
+
+		.meter {
+			display: grid;
+			grid-template-columns: 92px 1fr 64px;
+			align-items: center;
+			gap: 12px;
+		}
+
+		.meter .lbl {
+			font-size: 13px;
+			color: var(--ink-2);
+		}
+
+		.meter .lbl small {
+			display: block;
+			color: var(--muted);
+			font-size: 11px;
+		}
+
+		.track {
+			position: relative;
+			height: 10px;
+			border-radius: 6px;
+			background: var(--surface-2);
+			overflow: hidden;
+		}
+
+		.track::before {
+			/* center baseline */
+			content: "";
+			position: absolute;
+			left: 50%;
+			top: 0;
+			bottom: 0;
+			width: 2px;
+			background: var(--hairline);
+			transform: translateX(-1px);
+		}
+
+		.track .fill {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			border-radius: 6px;
+			transition: width .05s linear, left .05s linear;
+		}
+
+		.meter .val {
+			text-align: right;
+			font-size: 14px;
+			font-variant-numeric: tabular-nums;
+			color: var(--ink);
+		}
+
+		/* ---------- Side column ---------- */
+		.side {
+			grid-area: side;
+			display: grid;
+			grid-template-rows: auto auto 1fr;
+			gap: var(--gap);
+			min-height: 0;
+		}
+
+		.side>.panel {
+			display: flex;
+			flex-direction: column;
+		}
+
+		/* Safety */
+		.safety {
+			padding: 14px;
+			display: grid;
+			gap: 12px;
+		}
+
+		.estop {
+			appearance: none;
+			border: none;
+			cursor: pointer;
+			width: 100%;
+			padding: 16px;
+			border-radius: 12px;
+			font-size: 16px;
+			font-weight: 750;
+			letter-spacing: .12em;
+			color: #fff;
+			background: var(--critical);
+			box-shadow: 0 0 0 4px color-mix(in srgb, var(--critical) 22%, transparent), inset 0 -3px 0 #0004;
+			transition: transform .05s;
+		}
+
+		.estop:active {
+			transform: translateY(1px);
+		}
+
+		.reset {
+			appearance: none;
+			border: 1px solid var(--hairline);
+			cursor: pointer;
+			width: 100%;
+			padding: 11px;
+			border-radius: 10px;
+			font-size: 13px;
+			font-weight: 650;
+			letter-spacing: .06em;
+			color: var(--ink-2);
+			background: var(--surface-2);
+			transition: all .08s;
+		}
+
+		.reset:hover {
+			color: var(--ink);
+			border-color: var(--accent);
+		}
+
+		.reset:active {
+			transform: translateY(1px);
+		}
+
+		.reason {
+			padding: 0 14px 12px;
+			font-size: 12px;
+			color: var(--muted);
+			min-height: 1.2em;
+		}
+
+		.deadman {
+			appearance: none;
+			cursor: pointer;
+			width: 100%;
+			padding: 13px;
+			border-radius: 10px;
+			font-size: 14px;
+			font-weight: 650;
+			letter-spacing: .06em;
+			user-select: none;
+			color: var(--ink-2);
+			background: var(--surface-2);
+			border: 1px solid var(--hairline);
+			transition: all .08s;
+		}
+
+		.deadman.armed {
+			color: #06210a;
+			background: var(--good);
+			border-color: transparent;
+			box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent);
+		}
+
+		.deadman small {
+			display: block;
+			font-weight: 500;
+			font-size: 11px;
+			opacity: .8;
+			margin-top: 2px;
+		}
+
+		/* State tiles */
+		.tiles {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 10px;
+			padding: 0 14px 14px;
+		}
+
+		.tile {
+			border: 1px solid var(--hairline);
+			border-radius: 10px;
+			padding: 11px 12px;
+			background: var(--surface-2);
+			display: grid;
+			gap: 4px;
+		}
+
+		.tile .k {
+			font-size: 11px;
+			color: var(--muted);
+			letter-spacing: .04em;
+		}
+
+		.tile .v {
+			display: flex;
+			align-items: center;
+			gap: 7px;
+			font-size: 14px;
+			font-weight: 650;
+		}
+
+		.tile .v .ic {
+			width: 9px;
+			height: 9px;
+			border-radius: 50%;
+			background: var(--muted);
+			flex: none;
+		}
+
+		.tile[data-s="good"] .v .ic {
+			background: var(--good);
+			box-shadow: 0 0 7px var(--good);
+		}
+
+		.tile[data-s="good"] .v {
+			color: #7fe07f;
+		}
+
+		.tile[data-s="warning"] .v .ic {
+			background: var(--warning);
+		}
+
+		.tile[data-s="warning"] .v {
+			color: var(--warning);
+		}
+
+		.tile[data-s="critical"] .v .ic {
+			background: var(--critical);
+		}
+
+		.tile[data-s="critical"] .v {
+			color: #f08b8b;
+		}
+
+		/* Controls */
+		.controls {
+			padding: 14px;
+			display: grid;
+			gap: 14px;
+			overflow: auto;
+		}
+
+		.dpad {
+			display: grid;
+			grid-template-columns: repeat(3, 1fr);
+			gap: 8px;
+			max-width: 220px;
+			margin: 0 auto;
+		}
+
+		.dpad button {
+			appearance: none;
+			border: 1px solid var(--hairline);
+			background: var(--surface-2);
+			color: var(--ink-2);
+			border-radius: 10px;
+			height: 46px;
+			font-size: 18px;
+			cursor: pointer;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			user-select: none;
+			transition: all .06s;
+		}
+
+		.dpad button:active,
+		.dpad button.on {
+			background: var(--accent);
+			color: #fff;
+			border-color: transparent;
+		}
+
+		.dpad .empty {
+			visibility: hidden;
+		}
+
+		.dpad small {
+			font-size: 9px;
+		}
+
+		.row {
+			display: grid;
+			gap: 6px;
+		}
+
+		.row label {
+			font-size: 12px;
+			color: var(--muted);
+			display: flex;
+			justify-content: space-between;
+		}
+
+		.row label b {
+			color: var(--ink-2);
+			font-weight: 600;
+			font-variant-numeric: tabular-nums;
+		}
+
+		input[type=range] {
+			width: 100%;
+			accent-color: var(--accent);
+		}
+
+		.hints {
+			font-size: 11px;
+			color: var(--muted);
+			line-height: 1.7;
+		}
+
+		.kbd {
+			display: inline-block;
+			padding: 1px 6px;
+			border: 1px solid var(--hairline);
+			border-radius: 5px;
+			background: var(--surface-2);
+			color: var(--ink-2);
+			font-size: 11px;
+			font-family: ui-monospace, monospace;
+		}
+
+		/* Joystick */
+		.joy-head {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 8px;
+			cursor: pointer;
+			user-select: none;
+		}
+
+		.joy-head .name {
+			color: var(--muted);
+			font-weight: 400;
+			text-transform: none;
+			letter-spacing: 0;
+			font-size: 11px;
+		}
+
+		.joy-chevron {
+			color: var(--muted);
+			font-size: 11px;
+			transition: transform .15s;
+		}
+
+		.joy-chevron.open {
+			transform: rotate(90deg);
+		}
+
+		.joy-body {
+			display: none;
+			padding: 12px 14px 14px;
+			gap: 10px;
+			overflow: auto;
+		}
+
+		.joy-body.open {
+			display: grid;
+		}
+
+		.joy-raw {
+			font-size: 10.5px;
+			color: var(--muted);
+			font-family: ui-monospace, monospace;
+			line-height: 1.6;
+			background: var(--surface-2);
+			border-radius: 8px;
+			padding: 7px 9px;
+			word-break: break-all;
+		}
+
+		.joy-row {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			font-size: 12px;
+		}
+
+		.joy-row .lbl {
+			flex: 1;
+			color: var(--ink-2);
+		}
+
+		.joy-row .val {
+			width: 60px;
+			text-align: right;
+			font-variant-numeric: tabular-nums;
+			color: var(--ink);
+			font-size: 11px;
+		}
+
+		.joy-row .inv {
+			display: flex;
+			align-items: center;
+			gap: 4px;
+			color: var(--muted);
+			font-size: 11px;
+			white-space: nowrap;
+		}
+
+		.joy-row .assign {
+			appearance: none;
+			border: 1px solid var(--hairline);
+			background: var(--surface-2);
+			color: var(--ink-2);
+			border-radius: 7px;
+			padding: 4px 9px;
+			font-size: 11px;
+			cursor: pointer;
+			white-space: nowrap;
+		}
+
+		.joy-row .assign.listening {
+			background: var(--accent);
+			color: #fff;
+			border-color: transparent;
+			animation: pulse 1s infinite;
+		}
+
+		.joy-reset {
+			appearance: none;
+			border: 1px solid var(--hairline);
+			background: none;
+			color: var(--muted);
+			border-radius: 7px;
+			padding: 6px;
+			font-size: 11px;
+			cursor: pointer;
+			justify-self: start;
+		}
+
+		.joy-reset:hover {
+			color: var(--ink-2);
+		}
+
+		/* E-stop banner */
+		.banner {
+			display: none;
+			position: fixed;
+			inset: 0 0 auto 0;
+			z-index: 20;
+			padding: 12px;
+			text-align: center;
+			font-weight: 700;
+			letter-spacing: .1em;
+			color: #fff;
+			background: var(--critical);
+			animation: pulse 1.2s infinite;
+		}
+
+		.banner.show {
+			display: block;
+		}
+
+		@keyframes pulse {
+
+			0%,
+			100% {
+				opacity: 1;
+			}
+
+			50% {
+				opacity: .55;
+			}
+		}
+
+		/* ---------- Responsive ---------- */
+		@media (max-width: 900px) {
+			body {
+				overflow: auto;
+			}
+
+			.app {
+				height: auto;
+			}
+
+			main {
+				grid-template-columns: 1fr;
+				grid-template-rows: none;
+				grid-template-areas: "video" "side" "tele";
+				height: auto;
+			}
+
+			.video {
+				aspect-ratio: 4 / 3;
+			}
+
+			.side {
+				grid-template-rows: none;
+			}
+		}
+	</style>
 </head>
+
 <body>
-  <div class="banner" id="banner"></div>
+	<div class="banner" id="banner"></div>
 
-  <div class="app">
-    <header>
-      <div class="brand"><span class="dot" id="brandDot"></span>Roby <small>· Téléopération</small></div>
-      <div class="header-spacer"></div>
-      <span class="conn" id="conn"><span class="led"></span><span id="connText">connexion…</span></span>
-      <span class="clock" id="clock">--:--:--</span>
-    </header>
+	<div class="app">
+		<header>
+			<div class="brand"><span class="dot" id="brandDot"></span>Roby <small>· Téléopération</small></div>
+			<div class="header-spacer"></div>
+			<span class="conn" id="conn"><span class="led"></span><span id="connText">connexion…</span></span>
+			<span class="clock" id="clock">--:--:--</span>
+		</header>
 
-    <main>
-      <!-- Video -->
-      <section class="panel video" aria-label="Caméra">
-        <img id="cam" alt="Flux caméra robot">
-        <div class="chips">
-          <span class="chip"><span>FPS</span><b id="fps">–</b></span>
-          <span class="chip"><span>latence</span><b id="age">–</b></span>
-          <span class="chip"><span>caméra avant</span></span>
-        </div>
-        <div class="rec"><span class="dot"></span>LIVE</div>
-        <div class="noSignal show" id="noSignal">
-          <div class="big">AUCUN SIGNAL</div>
-          <div class="sub">en attente du flux caméra du robot…</div>
-        </div>
-      </section>
+		<main>
+			<!-- Video -->
+			<section class="panel video" aria-label="Caméra">
+				<canvas id="cam" role="img" aria-label="Flux caméra robot"></canvas>
+				<div class="chips">
+					<span class="chip"><span>FPS</span><b id="fps">–</b></span>
+					<span class="chip"><span>latence</span><b id="age">–</b></span>
+					<span class="chip"><span>caméra avant</span></span>
+				</div>
+				<div class="rec"><span class="dot"></span>LIVE</div>
+				<div class="noSignal show" id="noSignal">
+					<div class="big">AUCUN SIGNAL</div>
+					<div class="sub">en attente du flux caméra du robot…</div>
+				</div>
+			</section>
 
-      <!-- Side column -->
-      <div class="side">
-        <!-- Safety -->
-        <section class="panel">
-          <div class="panel-title">Sécurité</div>
-          <div class="safety">
-            <button class="estop" id="estop">⛔ ARRÊT D'URGENCE</button>
-            <button class="reset" id="reset">↻ RÉARMER</button>
-            <button class="deadman" id="deadman">HOMME-MORT — MAINTENIR
-              <small>maintenir <span class="kbd">Espace</span> ou ce bouton pour autoriser le mouvement</small>
-            </button>
-          </div>
-          <div class="panel-title">État</div>
-          <div class="tiles">
-            <div class="tile" id="t-robot"  data-s="critical"><div class="k">Robot</div><div class="v"><span class="ic"></span><span>—</span></div></div>
-            <div class="tile" id="t-cam"    data-s="critical"><div class="k">Caméra</div><div class="v"><span class="ic"></span><span>—</span></div></div>
-            <div class="tile" id="t-dead"   data-s="warning"><div class="k">Homme-mort</div><div class="v"><span class="ic"></span><span>—</span></div></div>
-            <div class="tile" id="t-fsm"    data-s="warning"><div class="k">État base</div><div class="v"><span class="ic"></span><span>—</span></div></div>
-          </div>
-          <div class="reason" id="reasonLine"></div>
-        </section>
+			<!-- Side column -->
+			<div class="side">
+				<!-- Safety -->
+				<section class="panel">
+					<div class="panel-title">Sécurité</div>
+					<div class="safety">
+						<button class="estop" id="estop">⛔ ARRÊT D'URGENCE</button>
+						<button class="reset" id="reset">↻ RÉARMER</button>
+						<button class="deadman" id="deadman">HOMME-MORT — MAINTENIR
+							<small>maintenir <span class="kbd">Espace</span> ou ce bouton pour autoriser le
+								mouvement</small>
+						</button>
+					</div>
+					<div class="tiles">
+						<div class="tile" id="t-robot" data-s="critical">
+							<div class="k">Robot</div>
+							<div class="v"><span class="ic"></span><span>—</span></div>
+						</div>
+						<div class="tile" id="t-cam" data-s="critical">
+							<div class="k">Caméra</div>
+							<div class="v"><span class="ic"></span><span>—</span></div>
+						</div>
+						<div class="tile" id="t-dead" data-s="warning">
+							<div class="k">Homme-mort</div>
+							<div class="v"><span class="ic"></span><span>—</span></div>
+						</div>
+						<div class="tile" id="t-fsm" data-s="warning">
+							<div class="k">État base</div>
+							<div class="v"><span class="ic"></span><span>—</span></div>
+						</div>
+						<div class="tile" id="t-arm" data-s="warning">
+							<div class="k">Bras</div>
+							<div class="v"><span class="ic"></span><span>—</span></div>
+						</div>
+					</div>
+					<div class="reason" id="reasonLine"></div>
+					<div class="reason" id="armJointsLine"></div>
+				</section>
 
-        <!-- Controls -->
-        <section class="panel">
-          <div class="panel-title">Contrôles</div>
-          <div class="controls">
-            <div class="row" id="browserCtrlRow">
-              <label style="flex-direction:row; align-items:center; gap:8px; cursor:pointer;">
-                <input type="checkbox" id="browserCtrl">
-                <span>Piloter depuis ce navigateur</span>
-              </label>
-              <div class="hints" style="margin-top:2px;">
-                Décoché par défaut : si <span class="kbd">input_agent.py</span> (manette physique)
-                pilote déjà le robot, laisser cette case décochée — sinon les deux
-                se battent sur les mêmes commandes et le robot ne bouge plus du tout.
-              </div>
-            </div>
-            <div class="dpad">
-              <button class="empty"></button>
-              <button data-k="fwd">↑<small>W</small></button>
-              <button class="empty"></button>
-              <button data-k="rotL">↺<small>A</small></button>
-              <button data-k="back">↓<small>S</small></button>
-              <button data-k="rotR">↻<small>D</small></button>
-              <button data-k="left">⇦<small>Q</small></button>
-              <button class="empty"></button>
-              <button data-k="right">⇨<small>E</small></button>
-            </div>
-            <div class="row">
-              <label>Vitesse max <b id="spdVal">60 %</b></label>
-              <input type="range" id="spd" min="10" max="100" value="60">
-            </div>
-            <div class="row">
-              <label>Pince <b id="gripVal">ouverte</b></label>
-              <input type="range" id="grip" min="0" max="100" value="0">
-            </div>
-            <div class="hints">
-              <span class="kbd">W</span>/<span class="kbd">S</span> avant·arrière ·
-              <span class="kbd">A</span>/<span class="kbd">D</span> rotation ·
-              <span class="kbd">Q</span>/<span class="kbd">E</span> latéral ·
-              <span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt · <span class="kbd">R</span> réarmer
-            </div>
-          </div>
-        </section>
+				<!-- Controls -->
+				<section class="panel">
+					<div class="panel-title">Contrôles</div>
+					<div class="controls">
+						<div class="row" id="browserCtrlRow">
+							<label style="flex-direction:row; align-items:center; gap:8px; cursor:pointer;">
+								<input type="checkbox" id="browserCtrl">
+								<span>Piloter depuis ce navigateur</span>
+							</label>
+							<div class="hints" style="margin-top:2px;">
+								Décoché par défaut : si <span class="kbd">input_agent.py</span> (manette physique)
+								pilote déjà le robot, laisser cette case décochée — sinon les deux
+								se battent sur les mêmes commandes et le robot ne bouge plus du tout.
+							</div>
+						</div>
+						<div class="dpad">
+							<button class="empty"></button>
+							<button data-k="fwd">↑<small>W</small></button>
+							<button class="empty"></button>
+							<button data-k="rotL">↺<small>A</small></button>
+							<button data-k="back">↓<small>S</small></button>
+							<button data-k="rotR">↻<small>D</small></button>
+							<button data-k="left">⇦<small>Q</small></button>
+							<button class="empty"></button>
+							<button data-k="right">⇨<small>E</small></button>
+						</div>
+						<div class="row">
+							<label>Vitesse max <b id="spdVal">60 %</b></label>
+							<input type="range" id="spd" min="10" max="100" value="60">
+						</div>
+						<div class="row">
+							<label>Pince <b id="gripVal">ouverte</b></label>
+							<input type="range" id="grip" min="0" max="100" value="0">
+						</div>
+						<div class="hints">
+							<span class="kbd">W</span>/<span class="kbd">S</span> avant·arrière ·
+							<span class="kbd">A</span>/<span class="kbd">D</span> rotation ·
+							<span class="kbd">Q</span>/<span class="kbd">E</span> latéral ·
+							<span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt · <span
+								class="kbd">R</span> réarmer
+						</div>
+					</div>
+				</section>
 
-        <!-- Joystick -->
-        <section class="panel" id="joyPanel">
-          <div class="panel-title joy-head" id="joyHead">
-            <span>Manette <span class="name" id="joyName">— non détectée</span></span>
-            <span class="joy-chevron" id="joyChevron">▸</span>
-          </div>
-          <div class="joy-body" id="joyBody">
-            <div class="joy-raw" id="joyRaw">en attente d'une manette…</div>
-            <div id="joyRows"></div>
-            <button class="joy-reset" id="joyResetMap">↺ réinitialiser le mapping</button>
-          </div>
-        </section>
-      </div>
+				<!-- Joystick -->
+				<section class="panel" id="joyPanel">
+					<div class="panel-title joy-head" id="joyHead">
+						<span>Manette <span class="name" id="joyName">— non détectée</span></span>
+						<span class="joy-chevron" id="joyChevron">▸</span>
+					</div>
+					<div class="joy-body" id="joyBody">
+						<div class="joy-raw" id="joyRaw">en attente d'une manette…</div>
+						<div id="joyRows"></div>
+						<button class="joy-reset" id="joyResetMap">↺ réinitialiser le mapping</button>
+					</div>
+				</section>
+			</div>
 
-      <!-- Telemetry -->
-      <section class="panel tele">
-        <div class="panel-title">Télémétrie — commande base (normalisée)</div>
-        <div class="meters">
-          <div class="meter"><div class="lbl">vx<small>avant / arrière</small></div>
-            <div class="track"><div class="fill" id="m-vx" style="background:var(--vx)"></div></div>
-            <div class="val" id="v-vx">+0.00</div></div>
-          <div class="meter"><div class="lbl">vy<small>latéral</small></div>
-            <div class="track"><div class="fill" id="m-vy" style="background:var(--vy)"></div></div>
-            <div class="val" id="v-vy">+0.00</div></div>
-          <div class="meter"><div class="lbl">wz<small>rotation</small></div>
-            <div class="track"><div class="fill" id="m-wz" style="background:var(--wz)"></div></div>
-            <div class="val" id="v-wz">+0.00</div></div>
-        </div>
-      </section>
-    </main>
-  </div>
+			<!-- Telemetry -->
+			<section class="panel tele">
+				<div class="panel-title">Télémétrie — commande base (normalisée)</div>
+				<div class="meters">
+					<div class="meter">
+						<div class="lbl">vx<small>avant / arrière</small></div>
+						<div class="track">
+							<div class="fill" id="m-vx" style="background:var(--vx)"></div>
+						</div>
+						<div class="val" id="v-vx">+0.00</div>
+					</div>
+					<div class="meter">
+						<div class="lbl">vy<small>latéral</small></div>
+						<div class="track">
+							<div class="fill" id="m-vy" style="background:var(--vy)"></div>
+						</div>
+						<div class="val" id="v-vy">+0.00</div>
+					</div>
+					<div class="meter">
+						<div class="lbl">wz<small>rotation</small></div>
+						<div class="track">
+							<div class="fill" id="m-wz" style="background:var(--wz)"></div>
+						</div>
+						<div class="val" id="v-wz">+0.00</div>
+					</div>
+				</div>
+			</section>
+		</main>
+	</div>
 
-  <script>
-  (() => {
-    const $ = (id) => document.getElementById(id);
-    const host = location.host;
+	<script>
+		(() => {
+			const $ = (id) => document.getElementById(id);
+			const host = location.host;
 
-    // ---- Auto-reconnecting WebSocket helper ----
-    function ws(path, onmsg, onopen, binary) {
-      let sock, alive = false;
-      const connect = () => {
-        sock = new WebSocket(`ws://${host}${path}`);
-        if (binary) sock.binaryType = "arraybuffer";
-        sock.onopen = () => { alive = true; onopen && onopen(sock); };
-        sock.onmessage = onmsg;
-        sock.onclose = () => { alive = false; setTimeout(connect, 800); };
-        sock.onerror = () => sock.close();
-      };
-      connect();
-      return { send: (o) => { if (alive) sock.send(JSON.stringify(o)); }, isAlive: () => alive };
-    }
+			// ---- Auto-reconnecting WebSocket helper ----
+			function ws(path, onmsg, onopen, binary) {
+				let sock, alive = false;
+				const connect = () => {
+					sock = new WebSocket(`ws://${host}${path}`);
+					if (binary) sock.binaryType = "arraybuffer";
+					sock.onopen = () => { alive = true; onopen && onopen(sock); };
+					sock.onmessage = onmsg;
+					sock.onclose = () => { alive = false; setTimeout(connect, 800); };
+					sock.onerror = () => sock.close();
+				};
+				connect();
+				return { send: (o) => { if (alive) sock.send(JSON.stringify(o)); }, isAlive: () => alive };
+			}
 
-    // ---- Camera ----
-    const cam = $("cam"), noSignal = $("noSignal");
-    let lastFrame = 0, frameStamps = [], camObjectUrl = null;
-    // Receiving a frame and displaying it are deliberately decoupled: onmessage
-    // just stashes the latest ArrayBuffer (cheap), a requestAnimationFrame loop
-    // does the actual Blob/decode/paint work. If the main thread is ever busy
-    // (gamepad polling, other WS handlers, a GC pause) and several frames pile
-    // up in the WS event queue, onmessage still drains them all in order --
-    // but only the LAST one is ever rendered, so a momentary stall can no
-    // longer turn into a growing backlog of stale frames displayed late one
-    // after another (that was the actual cause of latency drifting from
-    // ~200ms up to ~0.5s instead of staying flat).
-    let latestCamData = null, camDataSeq = 0, displayedSeq = -1;
-    const camSock = ws("/ws/camera", (e) => {
-      latestCamData = e.data;
-      camDataSeq++;
-      const now = performance.now();
-      lastFrame = now; frameStamps.push(now);
-      if (frameStamps.length > 30) frameStamps.shift();
-    }, null, true);
+			// ---- Camera ----
+			const cam = $("cam"), noSignal = $("noSignal");
+			const camCtx = cam.getContext("2d");
+			let lastFrame = 0, frameStamps = [];
+			// Receiving a frame and displaying it are deliberately decoupled: onmessage
+			// just stashes the latest ArrayBuffer (cheap), a requestAnimationFrame loop
+			// does the actual decode/paint work. If the main thread is ever busy
+			// (gamepad polling, other WS handlers, a GC pause) and several frames pile
+			// up in the WS event queue, onmessage still drains them all in order --
+			// but only the LAST one is ever rendered, so a momentary stall can no
+			// longer turn into a growing backlog of stale frames displayed late one
+			// after another (that was the actual cause of latency drifting from
+			// ~200ms up to ~0.5s instead of staying flat).
+			let latestCamData = null, camDataSeq = 0, displayedSeq = -1, renderingCam = false;
+			const camSock = ws("/ws/camera", (e) => {
+				latestCamData = e.data;
+				camDataSeq++;
+				const now = performance.now();
+				lastFrame = now; frameStamps.push(now);
+				if (frameStamps.length > 30) frameStamps.shift();
+			}, null, true);
 
-    function renderCamFrame() {
-      if (camDataSeq !== displayedSeq && latestCamData) {
-        displayedSeq = camDataSeq;
-        // Binary frames + Blob URL instead of base64 data URIs: skips the
-        // ~33% base64 size overhead and its encode/decode cost on both ends.
-        const url = URL.createObjectURL(new Blob([latestCamData], { type: "image/jpeg" }));
-        const prev = camObjectUrl;
-        camObjectUrl = url;
-        cam.onload = () => { if (prev) URL.revokeObjectURL(prev); };
-        cam.src = url;
-      }
-      requestAnimationFrame(renderCamFrame);
-    }
-    requestAnimationFrame(renderCamFrame);
+			async function renderCamFrame() {
+				if (camDataSeq !== displayedSeq && latestCamData && !renderingCam) {
+					displayedSeq = camDataSeq;
+					renderingCam = true;
+					// Binary frames straight into createImageBitmap + canvas: skips both
+					// the ~33% base64 size overhead of a data URI AND the Blob-URL
+					// create/revoke bookkeeping an <img> would need.
+					try {
+						const bitmap = await createImageBitmap(new Blob([latestCamData], { type: "image/jpeg" }));
+						if (cam.width !== bitmap.width || cam.height !== bitmap.height) {
+							cam.width = bitmap.width;
+							cam.height = bitmap.height;
+						}
+						camCtx.drawImage(bitmap, 0, 0);
+						bitmap.close();
+					} finally {
+						renderingCam = false;
+					}
+				}
+				requestAnimationFrame(renderCamFrame);
+			}
+			requestAnimationFrame(renderCamFrame);
 
-    // ---- Status (robot heartbeat + reported state) ----
-    // state schema published by robot/robot_agent.py:
-    //   {moving, estop, deadman_ok, fresh_cmd, ts}
-    let robotState = {};
-    const setTile = (id, status, text) => {
-      const t = $(id); t.dataset.s = status;
-      t.querySelector(".v span:last-child").textContent = text;
-    };
-    const statusSock = ws("/ws/status", (e) => {
-      const s = JSON.parse(e.data);
-      robotState = s.state || {};
-      setTile("t-robot", s.robot ? "good" : "critical", s.robot ? "ACTIF" : "PERDU");
-      $("brandDot").style.background = s.robot ? "var(--good)" : "var(--critical)";
+			// ---- Status (robot heartbeat + reported state) ----
+			// state schema published by robot/robot_agent.py:
+			//   {moving, estop, deadman_ok, fresh_cmd, ts}
+			let robotState = {};
+			const setTile = (id, status, text) => {
+				const t = $(id); t.dataset.s = status;
+				t.querySelector(".v span:last-child").textContent = text;
+			};
+			const statusSock = ws("/ws/status", (e) => {
+				const s = JSON.parse(e.data);
+				robotState = s.state || {};
+				setTile("t-robot", s.robot ? "good" : "critical", s.robot ? "ACTIF" : "PERDU");
+				$("brandDot").style.background = s.robot ? "var(--good)" : "var(--critical)";
 
-      const estop = !!robotState.estop;
-      $("banner").classList.toggle("show", estop);
-      $("banner").textContent = estop
-        ? "⚠ ARRÊT D'URGENCE ACTIF — cliquer RÉARMER puis ré-activer le homme-mort"
-        : '';
-      setTile("t-fsm",
-        estop ? "critical" : (robotState.moving ? "good" : "warning"),
-        estop ? "E-STOP" : (robotState.moving ? "EN MOUVEMENT" : "ARRÊT"));
-      $("reasonLine").textContent = (!estop && !robotState.moving)
-        ? `homme-mort : ${robotState.deadman_ok ? "oui" : "non"} · commande : ${robotState.fresh_cmd ? "fraîche" : "périmée"}`
-        : '';
-    });
+				const estop = !!robotState.estop;
+				$("banner").classList.toggle("show", estop);
+				$("banner").textContent = estop
+					? "⚠ ARRÊT D'URGENCE ACTIF — cliquer RÉARMER puis ré-activer le homme-mort"
+					: '';
+				setTile("t-fsm",
+					estop ? "critical" : (robotState.moving ? "good" : "warning"),
+					estop ? "E-STOP" : (robotState.moving ? "EN MOUVEMENT" : "ARRÊT"));
+				$("reasonLine").textContent = (!estop && !robotState.moving)
+					? `homme-mort : ${robotState.deadman_ok ? "oui" : "non"} · commande : ${robotState.fresh_cmd ? "fraîche" : "périmée"}`
+					: '';
 
-    // ---- Connection badge (server link) ----
-    setInterval(() => {
-      const up = camSock.isAlive() || statusSock.isAlive() || ctrlSock.isAlive();
-      const c = $("conn");
-      c.className = "conn " + (up ? "live" : "down");
-      $("connText").textContent = up ? "serveur connecté" : "reconnexion…";
-    }, 500);
+				// arm state schema published by robot/arm_agent.py (relayed as-is,
+				// empty object once stale -- see web_server.py):
+				//   {connected, moving, fresh_cmd, estop, joints, ts}
+				const armState = s.arm || {};
+				const armEstop = !!armState.estop;
+				setTile("t-arm",
+					!armState.connected ? "critical" : (armEstop ? "critical" : (armState.moving ? "good" : "warning")),
+					!armState.connected ? "DÉCONNECTÉ" : (armEstop ? "E-STOP" : (armState.moving ? "EN MOUVEMENT" : "INACTIF")));
+				const joints = armState.joints || {};
+				$("armJointsLine").textContent = Object.keys(joints).length
+					? Object.entries(joints).map(([k, v]) => `${k}:${v.toFixed(0)}°`).join("  ")
+					: '';
+			});
 
-    // ---- Clock + camera freshness (client-side) ----
-    setInterval(() => {
-      $("clock").textContent = new Date().toLocaleTimeString("fr-FR");
-      const now = performance.now();
-      const age = lastFrame ? now - lastFrame : Infinity;
-      const lost = age > 1000;
-      noSignal.classList.toggle("show", lost);
-      setTile("t-cam", lost ? "critical" : "good", lost ? "PERDUE" : "OK");
-      $("age").textContent = lost ? "—" : Math.round(age) + " ms";
-      // fps over the retained window
-      if (frameStamps.length > 1 && !lost) {
-        const span = (frameStamps[frameStamps.length - 1] - frameStamps[0]) / 1000;
-        $("fps").textContent = span > 0 ? (frameStamps.length - 1) / span < 1
-          ? "<1" : Math.round((frameStamps.length - 1) / span) : "–";
-      } else $("fps").textContent = "–";
-    }, 250);
+			// ---- Connection badge (server link) ----
+			setInterval(() => {
+				const up = camSock.isAlive() || statusSock.isAlive() || ctrlSock.isAlive();
+				const c = $("conn");
+				c.className = "conn " + (up ? "live" : "down");
+				$("connText").textContent = up ? "serveur connecté" : "reconnexion…";
+			}, 500);
 
-    // ================= CONTROL =================
-    const ctrlSock = ws("/ws/control", () => {});
+			// ---- Clock + camera freshness (client-side) ----
+			setInterval(() => {
+				$("clock").textContent = new Date().toLocaleTimeString("fr-FR");
+				const now = performance.now();
+				const age = lastFrame ? now - lastFrame : Infinity;
+				const lost = age > 1000;
+				noSignal.classList.toggle("show", lost);
+				setTile("t-cam", lost ? "critical" : "good", lost ? "PERDUE" : "OK");
+				$("age").textContent = lost ? "—" : Math.round(age) + " ms";
+				// fps over the retained window
+				if (frameStamps.length > 1 && !lost) {
+					const span = (frameStamps[frameStamps.length - 1] - frameStamps[0]) / 1000;
+					$("fps").textContent = span > 0 ? (frameStamps.length - 1) / span < 1
+						? "<1" : Math.round((frameStamps.length - 1) / span) : "–";
+				} else $("fps").textContent = "–";
+			}, 250);
 
-    const keys = { fwd:0, back:0, left:0, right:0, rotL:0, rotR:0 };
-    let deadman = false, speed = 0.60, gripper = 0.0;
+			// ================= CONTROL =================
+			const ctrlSock = ws("/ws/control", () => { });
 
-    const KEYMAP = { w:"fwd", s:"back", q:"left", e:"right", a:"rotL", d:"rotR",
-                     arrowup:"fwd", arrowdown:"back", arrowleft:"rotL", arrowright:"rotR" };
+			const keys = { fwd: 0, back: 0, left: 0, right: 0, rotL: 0, rotR: 0 };
+			let deadman = false, speed = 0.60, gripper = 0.0;
 
-    const setDeadman = (v) => {
-      deadman = v;
-      $("deadman").classList.toggle("armed", v);
-    };
+			const KEYMAP = {
+				w: "fwd", s: "back", q: "left", e: "right", a: "rotL", d: "rotR",
+				arrowup: "fwd", arrowdown: "back", arrowleft: "rotL", arrowright: "rotR"
+			};
 
-    document.addEventListener("keydown", (ev) => {
-      const k = ev.key.toLowerCase();
-      if (k === " ") { ev.preventDefault(); setDeadman(true); return; }
-      if (k === "x") { triggerStop(); return; }
-      if (k === "r") { ctrlSock.send({ type: "reset" }); return; }
-      if (KEYMAP[k]) { ev.preventDefault(); keys[KEYMAP[k]] = 1; highlight(KEYMAP[k], true); }
-    });
-    document.addEventListener("keyup", (ev) => {
-      const k = ev.key.toLowerCase();
-      if (k === " ") { setDeadman(false); return; }
-      if (KEYMAP[k]) { keys[KEYMAP[k]] = 0; highlight(KEYMAP[k], false); }
-    });
-    // Release everything if the tab loses focus (safety).
-    window.addEventListener("blur", () => {
-      for (const k in keys) keys[k] = 0;
-      setDeadman(false);
-      document.querySelectorAll(".dpad button").forEach(b => b.classList.remove("on"));
-    });
+			const setDeadman = (v) => {
+				deadman = v;
+				$("deadman").classList.toggle("armed", v);
+			};
 
-    const highlight = (k, on) =>
-      document.querySelectorAll(`.dpad button[data-k="${k}"]`).forEach(b => b.classList.toggle("on", on));
+			document.addEventListener("keydown", (ev) => {
+				const k = ev.key.toLowerCase();
+				if (k === " ") { ev.preventDefault(); setDeadman(true); return; }
+				if (k === "x") { triggerStop(); return; }
+				if (k === "r") { ctrlSock.send({ type: "reset" }); return; }
+				if (KEYMAP[k]) { ev.preventDefault(); keys[KEYMAP[k]] = 1; highlight(KEYMAP[k], true); }
+			});
+			document.addEventListener("keyup", (ev) => {
+				const k = ev.key.toLowerCase();
+				if (k === " ") { setDeadman(false); return; }
+				if (KEYMAP[k]) { keys[KEYMAP[k]] = 0; highlight(KEYMAP[k], false); }
+			});
+			// Release everything if the tab loses focus (safety).
+			window.addEventListener("blur", () => {
+				for (const k in keys) keys[k] = 0;
+				setDeadman(false);
+				document.querySelectorAll(".dpad button").forEach(b => b.classList.remove("on"));
+			});
 
-    // On-screen d-pad (pointer = works on touch + mouse)
-    document.querySelectorAll(".dpad button[data-k]").forEach(btn => {
-      const k = btn.dataset.k;
-      const down = (e) => { e.preventDefault(); keys[k] = 1; btn.classList.add("on"); };
-      const up   = () => { keys[k] = 0; btn.classList.remove("on"); };
-      btn.addEventListener("pointerdown", down);
-      btn.addEventListener("pointerup", up);
-      btn.addEventListener("pointerleave", up);
-      btn.addEventListener("pointercancel", up);
-    });
+			const highlight = (k, on) =>
+				document.querySelectorAll(`.dpad button[data-k="${k}"]`).forEach(b => b.classList.toggle("on", on));
 
-    // Deadman on-screen button (hold)
-    const dm = $("deadman");
-    dm.addEventListener("pointerdown", (e) => { e.preventDefault(); setDeadman(true); });
-    dm.addEventListener("pointerup", () => setDeadman(false));
-    dm.addEventListener("pointerleave", () => setDeadman(false));
-    dm.addEventListener("pointercancel", () => setDeadman(false));
+			// On-screen d-pad (pointer = works on touch + mouse)
+			document.querySelectorAll(".dpad button[data-k]").forEach(btn => {
+				const k = btn.dataset.k;
+				const down = (e) => { e.preventDefault(); keys[k] = 1; btn.classList.add("on"); };
+				const up = () => { keys[k] = 0; btn.classList.remove("on"); };
+				btn.addEventListener("pointerdown", down);
+				btn.addEventListener("pointerup", up);
+				btn.addEventListener("pointerleave", up);
+				btn.addEventListener("pointercancel", up);
+			});
 
-    // E-stop
-    const triggerStop = () => { ctrlSock.send({ type: "stop" }); };
-    $("estop").addEventListener("click", triggerStop);
-    $("reset").addEventListener("click", () => ctrlSock.send({ type: "reset" }));
+			// Deadman on-screen button (hold)
+			const dm = $("deadman");
+			dm.addEventListener("pointerdown", (e) => { e.preventDefault(); setDeadman(true); });
+			dm.addEventListener("pointerup", () => setDeadman(false));
+			dm.addEventListener("pointerleave", () => setDeadman(false));
+			dm.addEventListener("pointercancel", () => setDeadman(false));
 
-    // Speed + gripper sliders
-    $("spd").addEventListener("input", (e) => { speed = e.target.value / 100; $("spdVal").textContent = e.target.value + " %"; });
-    let gripTimer = 0;
-    function setGripper(v) {
-      gripper = Math.min(1, Math.max(0, v));
-      $("grip").value = Math.round(gripper * 100);
-      $("gripVal").textContent = gripper < 0.05 ? "ouverte" : gripper > 0.95 ? "fermée" : Math.round(gripper*100) + " %";
-      clearTimeout(gripTimer);
-      gripTimer = setTimeout(() => ctrlSock.send({ type: "gripper", value: gripper }), 40);
-    }
-    $("grip").addEventListener("input", (e) => setGripper(e.target.value / 100));
+			// E-stop
+			const triggerStop = () => { ctrlSock.send({ type: "stop" }); };
+			$("estop").addEventListener("click", triggerStop);
+			$("reset").addEventListener("click", () => ctrlSock.send({ type: "reset" }));
 
-    // ================= JOYSTICK (Gamepad API) =================
-    // Manette testée : Thrustmaster T.Flight Stick X (4 axes, 12 boutons, 1 hat).
-    // Mapping entièrement dynamique : cliquer "Assigner" puis bouger l'axe ou
-    // appuyer sur le bouton physique l'assigne. Persisté en localStorage.
-    const AXIS_DEADZONE = 0.08;
-    const JOY_KEY = "roby.joystick.mapping.v1";
-    const JOY_DEFAULTS = {
-      axisVx: 1, invVx: true,
-      axisVy: 0, invVy: false,
-      axisWz: 2, invWz: false,
-      axisSpeed: 3, invSpeed: false,
-      btnDeadman: 0, btnStop: 1, btnReset: 2, btnGripOpen: 3, btnGripClose: 4,
-    };
-    const JOY_ACTIONS = [
-      { key: "axisVx",     label: "Avant / arrière",  kind: "axis",   invKey: "invVx" },
-      { key: "axisVy",     label: "Latéral",          kind: "axis",   invKey: "invVy" },
-      { key: "axisWz",     label: "Rotation",         kind: "axis",   invKey: "invWz" },
-      { key: "axisSpeed",  label: "Vitesse max (slider)", kind: "axis", invKey: "invSpeed" },
-      { key: "btnDeadman", label: "Homme-mort",       kind: "button" },
-      { key: "btnStop",    label: "Arrêt d'urgence",  kind: "button" },
-      { key: "btnReset",   label: "Réarmer",          kind: "button" },
-      { key: "btnGripOpen",  label: "Pince : ouvrir", kind: "button" },
-      { key: "btnGripClose", label: "Pince : fermer", kind: "button" },
-    ];
+			// Speed + gripper sliders
+			$("spd").addEventListener("input", (e) => { speed = e.target.value / 100; $("spdVal").textContent = e.target.value + " %"; });
+			let gripTimer = 0;
+			function setGripper(v) {
+				gripper = Math.min(1, Math.max(0, v));
+				$("grip").value = Math.round(gripper * 100);
+				$("gripVal").textContent = gripper < 0.05 ? "ouverte" : gripper > 0.95 ? "fermée" : Math.round(gripper * 100) + " %";
+				clearTimeout(gripTimer);
+				gripTimer = setTimeout(() => ctrlSock.send({ type: "gripper", value: gripper }), 40);
+			}
+			$("grip").addEventListener("input", (e) => setGripper(e.target.value / 100));
 
-    let joyMap = { ...JOY_DEFAULTS };
-    try { Object.assign(joyMap, JSON.parse(localStorage.getItem(JOY_KEY) || "{}")); } catch {}
-    const saveJoyMap = () => localStorage.setItem(JOY_KEY, JSON.stringify(joyMap));
+			// ================= JOYSTICK (Gamepad API) =================
+			// Manette testée : Thrustmaster T.Flight Stick X (4 axes, 12 boutons, 1 hat).
+			// Mapping entièrement dynamique : cliquer "Assigner" puis bouger l'axe ou
+			// appuyer sur le bouton physique l'assigne. Persisté en localStorage.
+			const AXIS_DEADZONE = 0.08;
+			const JOY_KEY = "roby.joystick.mapping.v1";
+			const JOY_DEFAULTS = {
+				axisVx: 1, invVx: true,
+				axisVy: 0, invVy: false,
+				axisWz: 2, invWz: false,
+				axisSpeed: 3, invSpeed: false,
+				btnDeadman: 0, btnStop: 1, btnReset: 2, btnGripOpen: 3, btnGripClose: 4,
+			};
+			const JOY_ACTIONS = [
+				{ key: "axisVx", label: "Avant / arrière", kind: "axis", invKey: "invVx" },
+				{ key: "axisVy", label: "Latéral", kind: "axis", invKey: "invVy" },
+				{ key: "axisWz", label: "Rotation", kind: "axis", invKey: "invWz" },
+				{ key: "axisSpeed", label: "Vitesse max (slider)", kind: "axis", invKey: "invSpeed" },
+				{ key: "btnDeadman", label: "Homme-mort", kind: "button" },
+				{ key: "btnStop", label: "Arrêt d'urgence", kind: "button" },
+				{ key: "btnReset", label: "Réarmer", kind: "button" },
+				{ key: "btnGripOpen", label: "Pince : ouvrir", kind: "button" },
+				{ key: "btnGripClose", label: "Pince : fermer", kind: "button" },
+			];
 
-    let learningKey = null;
-    let joyIndex = null;
-    let prevJoyButtons = [];
+			let joyMap = { ...JOY_DEFAULTS };
+			try { Object.assign(joyMap, JSON.parse(localStorage.getItem(JOY_KEY) || "{}")); } catch { }
+			const saveJoyMap = () => localStorage.setItem(JOY_KEY, JSON.stringify(joyMap));
 
-    const joyHead = $("joyHead"), joyBody = $("joyBody"), joyChevron = $("joyChevron"), joyName = $("joyName");
-    joyHead.addEventListener("click", () => {
-      const open = joyBody.classList.toggle("open");
-      joyChevron.classList.toggle("open", open);
-    });
+			let learningKey = null;
+			let joyIndex = null;
+			let prevJoyButtons = [];
 
-    function renderJoyRows() {
-      const wrap = $("joyRows");
-      wrap.innerHTML = "";
-      for (const a of JOY_ACTIONS) {
-        const row = document.createElement("div");
-        row.className = "joy-row";
-        const cur = joyMap[a.key];
-        const curText = (cur == null || cur < 0) ? "—" : (a.kind === "axis" ? "axe " + cur : "bouton " + cur);
-        const invHtml = a.kind === "axis"
-          ? '<label class="inv"><input type="checkbox" id="joyinv-' + a.key + '"' +
-            (joyMap[a.invKey] ? " checked" : "") + '> inv.</label>'
-          : "";
-        row.innerHTML =
-          '<span class="lbl">' + a.label + '</span>' +
-          '<span class="val" id="joyval-' + a.key + '">' + curText + '</span>' +
-          invHtml +
-          '<button class="assign" data-key="' + a.key + '">Assigner</button>';
-        wrap.appendChild(row);
-        if (a.kind === "axis") {
-          $("joyinv-" + a.key).addEventListener("change", (e) => { joyMap[a.invKey] = e.target.checked; saveJoyMap(); });
-        }
-      }
-      wrap.querySelectorAll(".assign").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          wrap.querySelectorAll(".assign").forEach((b) => { b.classList.remove("listening"); b.textContent = "Assigner"; });
-          learningKey = btn.dataset.key;
-          btn.classList.add("listening");
-          btn.textContent = "…appuyer / bouger";
-        });
-      });
-    }
-    renderJoyRows();
+			const joyHead = $("joyHead"), joyBody = $("joyBody"), joyChevron = $("joyChevron"), joyName = $("joyName");
+			joyHead.addEventListener("click", () => {
+				const open = joyBody.classList.toggle("open");
+				joyChevron.classList.toggle("open", open);
+			});
 
-    $("joyResetMap").addEventListener("click", () => {
-      joyMap = { ...JOY_DEFAULTS };
-      saveJoyMap();
-      renderJoyRows();
-    });
+			function renderJoyRows() {
+				const wrap = $("joyRows");
+				wrap.innerHTML = "";
+				for (const a of JOY_ACTIONS) {
+					const row = document.createElement("div");
+					row.className = "joy-row";
+					const cur = joyMap[a.key];
+					const curText = (cur == null || cur < 0) ? "—" : (a.kind === "axis" ? "axe " + cur : "bouton " + cur);
+					const invHtml = a.kind === "axis"
+						? '<label class="inv"><input type="checkbox" id="joyinv-' + a.key + '"' +
+						(joyMap[a.invKey] ? " checked" : "") + '> inv.</label>'
+						: "";
+					row.innerHTML =
+						'<span class="lbl">' + a.label + '</span>' +
+						'<span class="val" id="joyval-' + a.key + '">' + curText + '</span>' +
+						invHtml +
+						'<button class="assign" data-key="' + a.key + '">Assigner</button>';
+					wrap.appendChild(row);
+					if (a.kind === "axis") {
+						$("joyinv-" + a.key).addEventListener("change", (e) => { joyMap[a.invKey] = e.target.checked; saveJoyMap(); });
+					}
+				}
+				wrap.querySelectorAll(".assign").forEach((btn) => {
+					btn.addEventListener("click", () => {
+						wrap.querySelectorAll(".assign").forEach((b) => { b.classList.remove("listening"); b.textContent = "Assigner"; });
+						learningKey = btn.dataset.key;
+						btn.classList.add("listening");
+						btn.textContent = "…appuyer / bouger";
+					});
+				});
+			}
+			renderJoyRows();
 
-    window.addEventListener("gamepadconnected", (e) => { joyIndex = e.gamepad.index; joyName.textContent = "— " + e.gamepad.id; });
-    window.addEventListener("gamepaddisconnected", (e) => {
-      if (joyIndex === e.gamepad.index) {
-        joyIndex = null;
-        joyName.textContent = "— non détectée";
-        $("joyRaw").textContent = "en attente d'une manette…";
-      }
-    });
+			$("joyResetMap").addEventListener("click", () => {
+				joyMap = { ...JOY_DEFAULTS };
+				saveJoyMap();
+				renderJoyRows();
+			});
 
-    function pollGamepad() {
-      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-      let gp = joyIndex != null ? pads[joyIndex] : null;
-      if (!gp) gp = Array.prototype.find.call(pads, (p) => p) || null;
-      if (gp && joyIndex == null) { joyIndex = gp.index; joyName.textContent = "— " + gp.id; }
-      return gp;
-    }
+			window.addEventListener("gamepadconnected", (e) => { joyIndex = e.gamepad.index; joyName.textContent = "— " + e.gamepad.id; });
+			window.addEventListener("gamepaddisconnected", (e) => {
+				if (joyIndex === e.gamepad.index) {
+					joyIndex = null;
+					joyName.textContent = "— non détectée";
+					$("joyRaw").textContent = "en attente d'une manette…";
+				}
+			});
 
-    function finishAssign(key, value) {
-      joyMap[key] = value;
-      saveJoyMap();
-      const kind = JOY_ACTIONS.find((a) => a.key === key).kind;
-      const val = $("joyval-" + key);
-      if (val) val.textContent = kind === "axis" ? "axe " + value : "bouton " + value;
-      const btn = document.querySelector('.assign[data-key="' + key + '"]');
-      if (btn) { btn.classList.remove("listening"); btn.textContent = "Assigner"; }
-      learningKey = null;
-    }
+			function pollGamepad() {
+				const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+				let gp = joyIndex != null ? pads[joyIndex] : null;
+				if (!gp) gp = Array.prototype.find.call(pads, (p) => p) || null;
+				if (gp && joyIndex == null) { joyIndex = gp.index; joyName.textContent = "— " + gp.id; }
+				return gp;
+			}
 
-    // Polled once per control tick (50 Hz) — reads gamepad state, drives the
-    // learn-mode capture, and returns the normalized contribution to send.
-    function updateJoystick() {
-      const gp = pollGamepad();
-      const out = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false };
-      if (!gp) { $("joyRaw").textContent = "en attente d'une manette…"; return out; }
+			function finishAssign(key, value) {
+				joyMap[key] = value;
+				saveJoyMap();
+				const kind = JOY_ACTIONS.find((a) => a.key === key).kind;
+				const val = $("joyval-" + key);
+				if (val) val.textContent = kind === "axis" ? "axe " + value : "bouton " + value;
+				const btn = document.querySelector('.assign[data-key="' + key + '"]');
+				if (btn) { btn.classList.remove("listening"); btn.textContent = "Assigner"; }
+				learningKey = null;
+			}
 
-      const axes = gp.axes, buttons = gp.buttons;
-      const activeBtns = [];
-      for (let i = 0; i < buttons.length; i++) if (buttons[i].pressed) activeBtns.push(i);
-      let raw = "axes: ";
-      for (let i = 0; i < axes.length; i++) raw += i + ":" + axes[i].toFixed(2) + "  ";
-      raw += "  boutons actifs: " + (activeBtns.length ? activeBtns.join(",") : "—");
-      $("joyRaw").textContent = raw;
+			// Polled once per control tick (50 Hz) — reads gamepad state, drives the
+			// learn-mode capture, and returns the normalized contribution to send.
+			function updateJoystick() {
+				const gp = pollGamepad();
+				const out = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false };
+				if (!gp) { $("joyRaw").textContent = "en attente d'une manette…"; return out; }
 
-      if (learningKey) {
-        const action = JOY_ACTIONS.find((a) => a.key === learningKey);
-        if (action.kind === "axis") {
-          const idx = axes.findIndex((v) => Math.abs(v) > 0.6);
-          if (idx >= 0) finishAssign(learningKey, idx);
-        } else if (activeBtns.length) {
-          finishAssign(learningKey, activeBtns[0]);
-        }
-      }
+				const axes = gp.axes, buttons = gp.buttons;
+				const activeBtns = [];
+				for (let i = 0; i < buttons.length; i++) if (buttons[i].pressed) activeBtns.push(i);
+				let raw = "axes: ";
+				for (let i = 0; i < axes.length; i++) raw += i + ":" + axes[i].toFixed(2) + "  ";
+				raw += "  boutons actifs: " + (activeBtns.length ? activeBtns.join(",") : "—");
+				$("joyRaw").textContent = raw;
 
-      const axisVal = (idx, inv) => {
-        if (idx == null || idx < 0 || idx >= axes.length) return 0;
-        let v = axes[idx];
-        if (Math.abs(v) < AXIS_DEADZONE) v = 0;
-        return inv ? -v : v;
-      };
-      const btnHeld = (idx) => idx != null && idx >= 0 && idx < buttons.length && buttons[idx].pressed;
+				if (learningKey) {
+					const action = JOY_ACTIONS.find((a) => a.key === learningKey);
+					if (action.kind === "axis") {
+						const idx = axes.findIndex((v) => Math.abs(v) > 0.6);
+						if (idx >= 0) finishAssign(learningKey, idx);
+					} else if (activeBtns.length) {
+						finishAssign(learningKey, activeBtns[0]);
+					}
+				}
 
-      out.vx = axisVal(joyMap.axisVx, joyMap.invVx);
-      out.vy = axisVal(joyMap.axisVy, joyMap.invVy);
-      out.wz = axisVal(joyMap.axisWz, joyMap.invWz);
-      if (joyMap.axisSpeed != null && joyMap.axisSpeed >= 0 && joyMap.axisSpeed < axes.length) {
-        let v = axes[joyMap.axisSpeed];
-        if (joyMap.invSpeed) v = -v;
-        out.speed = Math.min(1, Math.max(0, (v + 1) / 2));
-      }
-      out.deadman = btnHeld(joyMap.btnDeadman);
+				const axisVal = (idx, inv) => {
+					if (idx == null || idx < 0 || idx >= axes.length) return 0;
+					let v = axes[idx];
+					if (Math.abs(v) < AXIS_DEADZONE) v = 0;
+					return inv ? -v : v;
+				};
+				const btnHeld = (idx) => idx != null && idx >= 0 && idx < buttons.length && buttons[idx].pressed;
 
-      const pressedNow = buttons.map((b) => b.pressed);
-      const rising = (idx) => idx != null && idx >= 0 && pressedNow[idx] && !prevJoyButtons[idx];
-      if (rising(joyMap.btnStop)) triggerStop();
-      if (rising(joyMap.btnReset)) ctrlSock.send({ type: "reset" });
-      if (btnHeld(joyMap.btnGripOpen)) setGripper(gripper - 0.02);
-      if (btnHeld(joyMap.btnGripClose)) setGripper(gripper + 0.02);
-      prevJoyButtons = pressedNow;
+				out.vx = axisVal(joyMap.axisVx, joyMap.invVx);
+				out.vy = axisVal(joyMap.axisVy, joyMap.invVy);
+				out.wz = axisVal(joyMap.axisWz, joyMap.invWz);
+				if (joyMap.axisSpeed != null && joyMap.axisSpeed >= 0 && joyMap.axisSpeed < axes.length) {
+					let v = axes[joyMap.axisSpeed];
+					if (joyMap.invSpeed) v = -v;
+					out.speed = Math.min(1, Math.max(0, (v + 1) / 2));
+				}
+				out.deadman = btnHeld(joyMap.btnDeadman);
 
-      return out;
-    }
+				const pressedNow = buttons.map((b) => b.pressed);
+				const rising = (idx) => idx != null && idx >= 0 && pressedNow[idx] && !prevJoyButtons[idx];
+				if (rising(joyMap.btnStop)) triggerStop();
+				if (rising(joyMap.btnReset)) ctrlSock.send({ type: "reset" });
+				if (btnHeld(joyMap.btnGripOpen)) setGripper(gripper - 0.02);
+				if (btnHeld(joyMap.btnGripClose)) setGripper(gripper + 0.02);
+				prevJoyButtons = pressedNow;
 
-    // ---- Meters ----
-    const setMeter = (fillId, valId, v) => {
-      const w = Math.min(Math.abs(v), 1) * 50;                 // half-width %
-      const left = v < 0 ? (50 - w) : 50;
-      const fill = $(fillId);
-      fill.style.left = left + "%"; fill.style.width = w + "%";
-      $(valId).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
-    };
+				return out;
+			}
 
-    // ---- Browser-as-controller toggle ----
-    // Off by default: this loop below runs unconditionally the moment the
-    // page is open (e.g. just to watch the camera), and used to publish
-    // deadman/base at 20Hz regardless -- which silently fights any other
-    // command source (input_agent.py's joystick reader, running at 50Hz)
-    // publishing to the exact same Zenoh topics. Two sources racing on
-    // "deadman" means it flips true/false every other message, so
-    // deadman_ok reads false most of the time and the robot never
-    // actually moves, even though someone IS correctly holding the
-    // physical deadman button on their own controller. Gating all of it
-    // behind an explicit opt-in makes "just watching the camera" safe.
-    let browserControlEnabled = localStorage.getItem("roby.browserControl") === "1";
-    const browserCtrlBox = $("browserCtrl");
-    browserCtrlBox.checked = browserControlEnabled;
-    browserCtrlBox.addEventListener("change", (e) => {
-      browserControlEnabled = e.target.checked;
-      localStorage.setItem("roby.browserControl", browserControlEnabled ? "1" : "0");
-      if (!browserControlEnabled) {
-        // Release explicitly so this browser's last command doesn't linger
-        // as the most-recent one at the robot for CMD_TIMEOUT_SEC.
-        ctrlSock.send({ type: "deadman", value: false });
-        ctrlSock.send({ type: "base", vx: 0, vy: 0, wz: 0 });
-      }
-    });
+			// ---- Meters ----
+			const setMeter = (fillId, valId, v) => {
+				const w = Math.min(Math.abs(v), 1) * 50;                 // half-width %
+				const left = v < 0 ? (50 - w) : 50;
+				const fill = $(fillId);
+				fill.style.left = left + "%"; fill.style.width = w + "%";
+				$(valId).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
+			};
 
-    // ---- 20 Hz control loop ----
-    setInterval(() => {
-      const joy = updateJoystick();
-      const activeDeadman = (deadman || joy.deadman) && browserControlEnabled;
-      if (joy.speed != null) speed = joy.speed;
+			// ---- Browser-as-controller toggle ----
+			// Off by default: this loop below runs unconditionally the moment the
+			// page is open (e.g. just to watch the camera), and used to publish
+			// deadman/base at 20Hz regardless -- which silently fights any other
+			// command source (input_agent.py's joystick reader, running at 50Hz)
+			// publishing to the exact same Zenoh topics. Two sources racing on
+			// "deadman" means it flips true/false every other message, so
+			// deadman_ok reads false most of the time and the robot never
+			// actually moves, even though someone IS correctly holding the
+			// physical deadman button on their own controller. Gating all of it
+			// behind an explicit opt-in makes "just watching the camera" safe.
+			let browserControlEnabled = localStorage.getItem("roby.browserControl") === "1";
+			const browserCtrlBox = $("browserCtrl");
+			browserCtrlBox.checked = browserControlEnabled;
+			browserCtrlBox.addEventListener("change", (e) => {
+				browserControlEnabled = e.target.checked;
+				localStorage.setItem("roby.browserControl", browserControlEnabled ? "1" : "0");
+				if (!browserControlEnabled) {
+					// Release explicitly so this browser's last command doesn't linger
+					// as the most-recent one at the robot for CMD_TIMEOUT_SEC.
+					ctrlSock.send({ type: "deadman", value: false });
+					ctrlSock.send({ type: "base", vx: 0, vy: 0, wz: 0 });
+				}
+			});
 
-      let vx = Math.max(-1, Math.min(1, (keys.fwd - keys.back) + joy.vx)) * speed;
-      let vy = Math.max(-1, Math.min(1, (keys.right - keys.left) + joy.vy)) * speed;   // Q/E strafe
-      let wz = Math.max(-1, Math.min(1, (keys.rotR - keys.rotL) + joy.wz)) * speed;    // A/D rotate
-      if (!activeDeadman) { vx = vy = wz = 0; }
-      setMeter("m-vx", "v-vx", vx);
-      setMeter("m-vy", "v-vy", vy);
-      setMeter("m-wz", "v-wz", wz);
-      if (browserControlEnabled) {
-        ctrlSock.send({ type: "deadman", value: activeDeadman });
-        ctrlSock.send({ type: "base", vx, vy, wz });
-      }
-      $("deadman").classList.toggle("armed", activeDeadman);
-      setTile("t-dead", activeDeadman ? "good" : "warning", activeDeadman ? "ARMÉ" : "RELÂCHÉ");
-    }, 50);
-  })();
-  </script>
+			// ---- 20 Hz control loop ----
+			setInterval(() => {
+				const joy = updateJoystick();
+				const activeDeadman = (deadman || joy.deadman) && browserControlEnabled;
+				if (joy.speed != null) speed = joy.speed;
+
+				let vx = Math.max(-1, Math.min(1, (keys.fwd - keys.back) + joy.vx)) * speed;
+				let vy = Math.max(-1, Math.min(1, (keys.right - keys.left) + joy.vy)) * speed;   // Q/E strafe
+				let wz = Math.max(-1, Math.min(1, (keys.rotR - keys.rotL) + joy.wz)) * speed;    // A/D rotate
+				if (!activeDeadman) { vx = vy = wz = 0; }
+				setMeter("m-vx", "v-vx", vx);
+				setMeter("m-vy", "v-vy", vy);
+				setMeter("m-wz", "v-wz", wz);
+				if (browserControlEnabled) {
+					ctrlSock.send({ type: "deadman", value: activeDeadman });
+					ctrlSock.send({ type: "base", vx, vy, wz });
+				}
+				$("deadman").classList.toggle("armed", activeDeadman);
+				setTile("t-dead", activeDeadman ? "good" : "warning", activeDeadman ? "ARMÉ" : "RELÂCHÉ");
+			}, 50);
+		})();
+	</script>
 </body>
+
 </html>
