@@ -28,6 +28,11 @@ config/
 operator/
   input_agent.py         joystick + GELLO -> commandes robot
   web_server.py          pont Zenoh <-> navigateur (FastAPI + WebSocket)
+  web/
+    index.html           UI opérateur (markup seul)
+    static/app.css       design system (thème sombre poste de pilotage)
+    static/js/           modules ES : config (store central), net, camera,
+                         status, control, joystick, gello, settings, main
   gello_reader.py        lit le GELLO en série, produit des angles calibrés follower
   gello_calibration.json calibration GELLO déjà mesurée (copie de mon_gello.json)
 robot/
@@ -193,12 +198,37 @@ Points clés :
 Interface web : `http://IP_DU_PC_OPERATEUR:8080`
 
 L'interface web est un **vrai poste de pilotage**, pas seulement un visualiseur :
-flux caméra, tuiles d'état (robot / caméra / homme-mort / mouvement), jauges de
-vitesse, et pilotage clavier + pavé à l'écran + manette.
+flux caméra (plein écran, contain/cover), tuiles d'état (robot / caméra /
+homme-mort / base / bras + angles des joints), jauges de télémétrie, et
+pilotage clavier + pavé à l'écran + manette + GELLO.
 
 - **Espace** (maintenu) = homme-mort, obligatoire pour bouger
-- **W/S** avant·arrière · **A/D** rotation · **Q/E** latéral
-- **X** ou le gros bouton = arrêt d'urgence · curseurs vitesse max + pince
+- Touches lettres détectées par **position physique** (`event.code`) : le même
+  geste marche en QWERTY (WASD + Q/E) et en AZERTY (ZQSD + A/E)
+- **X** ou le gros bouton = arrêt d'urgence · **R** réarmer · **F** plein
+  écran · **?** aide raccourcis · curseurs vitesse max + pince
+
+### Réglages (⚙)
+
+Toute la configuration de l'UI passe par un **store central versionné**
+(`roby.config.v2` en localStorage, modules `static/js/config.js` +
+`settings.js`) exposé dans le panneau ⚙ du header, en quatre onglets :
+
+- **Contrôle** : fréquence d'envoi des commandes (10–50 Hz), vitesse max au
+  chargement, mémorisation de la vitesse, pas de la pince ;
+- **Manette** : zone morte des axes (le mapping par action reste dans le
+  panneau Manette de la page, avec les valeurs brutes en direct) ;
+- **GELLO** : débit série, délai de boot Arduino, lissage, marge aux butées,
+  reconnexion automatique au chargement (dernier port autorisé) ;
+- **Interface** : ajustement vidéo, affichage télémétrie / angles bras, seuil
+  « signal perdu ».
+
+La config s'**exporte/importe en JSON** (bouton dans le panneau — pratique
+pour répliquer un poste opérateur) ; l'import est validé clé par clé contre
+les valeurs par défaut (types vérifiés, clés inconnues ignorées). Les
+anciennes clés localStorage éparses (`roby.browserControl`,
+`roby.joystick.mapping.v1`, …) sont migrées automatiquement au premier
+chargement.
 
 ### Manette (Gamepad API)
 
@@ -212,7 +242,8 @@ Le mapping est **entièrement dynamique**, pas câblé en dur : pour chaque
 action (avant/arrière, latéral, rotation, vitesse max, homme-mort, arrêt
 d'urgence, réarmer, pince ouvrir/fermer), cliquer « Assigner » puis bouger
 l'axe ou appuyer sur le bouton physique voulu — l'index est capturé et
-persisté dans le `localStorage` du navigateur. Un encart affiche les valeurs
+persisté dans le store de configuration central (voir [Réglages](#réglages-)).
+Un encart affiche les valeurs
 brutes des axes/boutons pour aider à repérer les indices, et « réinitialiser
 le mapping » revient aux valeurs par défaut (calibrées pour la T.Flight Stick
 X : axe 1 = avant/arrière inversé, axe 0 = latéral, axe 2 = rotation, axe 3 =

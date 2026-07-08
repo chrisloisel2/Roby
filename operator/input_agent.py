@@ -107,7 +107,15 @@ def main() -> None:
     pygame.init()
     pygame.joystick.init()
     if pygame.joystick.get_count() == 0:
-        raise RuntimeError("No joystick detected.")
+        # Not fatal: the browser UI (Gamepad API + Web Serial, see
+        # operator/web/index.html) can drive both the base and the GELLO on
+        # its own now. start_operator.sh backgrounds this process precisely
+        # so that having nothing to do here doesn't take zenohd/web_server
+        # down with it -- exit clean (not an exception) so that shows up as
+        # a plain informational line, not a traceback.
+        print("input_agent: no joystick detected -- nothing to do (drive from the browser "
+              "instead). Exiting.")
+        return
     joy = pygame.joystick.Joystick(0)
     joy.init()
     print(f"Joystick: {joy.get_name()}")

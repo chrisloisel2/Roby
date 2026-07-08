@@ -9,13 +9,20 @@ commands (base, deadman, gripper, E-stop, reset) from the browser to Zenoh.
 
 Endpoints
 ---------
-GET  /             the operator UI (operator/web/index.html)
-WS   /ws/camera    server -> browser : binary JPEG frames
-WS   /ws/status    server -> browser : robot heartbeat, reported state, fps, arm state
-WS   /ws/control   browser -> server : {type: base|deadman|stop|reset|gripper}
+GET  /                          the operator UI (operator/web/index.html)
+GET  /static/*                  the UI's assets (operator/web/static: css + JS modules)
+GET  /gello_calibration.json   GELLO calibration, fetched once by the browser's
+                                own Web Serial reader (see static/js/gello.js) so
+                                the measured values aren't duplicated in the page.
+WS   /ws/camera                server -> browser : binary JPEG frames
+WS   /ws/status                server -> browser : robot heartbeat, reported state, fps, arm state
+WS   /ws/control               browser -> server : {type: base|deadman|stop|reset|gripper|arm}
 
 Note: run ONE operator input source at a time (this web UI OR input_agent.py) —
-both publish to the same command topics.
+both publish to the same command topics. The browser can read the joystick
+(Gamepad API) and the GELLO (Web Serial API) directly, making it a complete
+alternative to input_agent.py -- see the "Piloter depuis ce navigateur"
+toggle in index.html.
 """
 import asyncio
 import json
@@ -28,9 +35,11 @@ import uvicorn
 import zenoh
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 CONFIG = Path(__file__).resolve().parent.parent / "config" / "operator_zenoh.json5"
+GELLO_CALIBRATION_PATH = Path(__file__).resolve().parent / "gello_calibration.json"
 
 CAMERA_KEY = "robot/camera/front/jpeg"
 HEARTBEAT_KEY = "robot/heartbeat"
@@ -46,7 +55,7 @@ _robot_state = {}
 _arm_state = {}
 
 # --- Zenoh handles, populated on startup -------------------------------------
-Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None}
+Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None, "arm": None}
 
 # Per-connected-client wakeups for /ws/camera, so a new frame is pushed the
 # instant it arrives instead of the old fixed 1/30s poll (which both capped
@@ -120,6 +129,7 @@ async def lifespan(_app: FastAPI):
     Z["reset"] = session.declare_publisher("robot/cmd/reset")
     Z["deadman"] = session.declare_publisher("operator/deadman")
     Z["gripper"] = session.declare_publisher("robot/cmd/gripper")
+    Z["arm"] = session.declare_publisher("robot/cmd/arm")
     print("web_server ready on http://0.0.0.0:8080")
     try:
         yield
@@ -134,10 +144,20 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# CSS + JS modules of the UI. StaticFiles handles ETag/Last-Modified itself,
+# so a hard-refresh after editing a file picks up the change without any
+# cache-busting machinery.
+app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
 
 @app.get("/")
 async def index():
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/gello_calibration.json")
+async def gello_calibration():
+    return FileResponse(GELLO_CALIBRATION_PATH)
 
 
 @app.websocket("/ws/camera")
@@ -203,6 +223,17 @@ def _handle_control(msg: dict) -> None:
         Z["reset"].put("1")
     elif kind == "gripper":
         Z["gripper"].put(json.dumps({"gripper": float(msg.get("value", 0.0)), "ts": time.time()}))
+    elif kind == "arm":
+        # joints/gripper already leader-calibrated to the follower's frame by
+        # the browser (see index.html's GELLO/Web Serial section, itself a
+        # port of operator/gello_reader.py's math) -- forwarded close to
+        # as-is, same contract as gello_reader.py's read_gello() output.
+        Z["arm"].put(json.dumps({
+            "joints": msg.get("joints", {}),
+            "gripper": msg.get("gripper"),
+            "mode": "joint_position",
+            "ts": time.time(),
+        }))
 
 
 @app.websocket("/ws/control")
@@ -220,4 +251,4 @@ async def control_ws(ws: WebSocket):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9090)
+    uvicorn.run(app, host="0.0.0.0", port=8080)

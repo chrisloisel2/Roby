@@ -43,4 +43,17 @@ python operator/web_server.py &
 WEB_PID=$!
 trap 'kill $ROUTER_PID $WEB_PID 2>/dev/null || true' EXIT
 
-python operator/input_agent.py
+# input_agent.py is optional, not core: the browser UI (Gamepad API + Web
+# Serial) can drive both the base and the GELLO on its own now, and
+# input_agent.py itself exits cleanly (not an error) when no joystick is
+# plugged in -- see its main(). Backgrounded and left OUT of the `wait`
+# below on purpose, so zenohd/web_server keep serving even if this exits
+# early; still added to the trap so Ctrl-C (or this script exiting for any
+# other reason) takes it down along with everything else.
+python operator/input_agent.py &
+INPUT_PID=$!
+trap 'kill $ROUTER_PID $WEB_PID $INPUT_PID 2>/dev/null || true' EXIT
+
+# Block on the two core services only -- Ctrl-C (SIGINT) interrupts this
+# `wait` immediately and runs the EXIT trap above.
+wait "$ROUTER_PID" "$WEB_PID"

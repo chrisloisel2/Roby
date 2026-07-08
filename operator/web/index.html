@@ -4,736 +4,11 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+	<meta name="theme-color" content="#0b0d10">
 	<title>Roby · Téléopération</title>
-	<style>
-		:root {
-			--plane: #0d0d0d;
-			--surface: #1a1a19;
-			--surface-2: #232321;
-			--ink: #ffffff;
-			--ink-2: #c3c2b7;
-			--muted: #898781;
-			--hairline: rgba(255, 255, 255, 0.10);
-			--hairline-2: rgba(255, 255, 255, 0.06);
-			--accent: #3987e5;
-			--good: #0ca30c;
-			--warning: #fab219;
-			--critical: #d03b3b;
-			--vx: #3987e5;
-			/* avant/arrière */
-			--vy: #199e70;
-			/* latéral */
-			--wz: #9085e9;
-			/* rotation */
-			--radius: 12px;
-			--gap: 14px;
-			font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-		}
-
-		* {
-			box-sizing: border-box;
-		}
-
-		html,
-		body {
-			height: 100%;
-		}
-
-		body {
-			margin: 0;
-			background: var(--plane);
-			color: var(--ink);
-			-webkit-font-smoothing: antialiased;
-			overflow: hidden;
-		}
-
-		.app {
-			display: grid;
-			height: 100vh;
-			grid-template-rows: auto 1fr;
-		}
-
-		/* ---------- Header ---------- */
-		header {
-			display: flex;
-			align-items: center;
-			gap: 16px;
-			padding: 12px 18px;
-			border-bottom: 1px solid var(--hairline);
-			background: var(--surface);
-		}
-
-		.brand {
-			display: flex;
-			align-items: center;
-			gap: 10px;
-			font-weight: 650;
-			letter-spacing: .2px;
-		}
-
-		.brand .dot {
-			width: 10px;
-			height: 10px;
-			border-radius: 50%;
-			background: var(--good);
-			box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent);
-		}
-
-		.brand small {
-			color: var(--muted);
-			font-weight: 500;
-		}
-
-		.header-spacer {
-			flex: 1;
-		}
-
-		.conn {
-			display: inline-flex;
-			align-items: center;
-			gap: 8px;
-			padding: 6px 12px;
-			border-radius: 999px;
-			border: 1px solid var(--hairline);
-			background: var(--surface-2);
-			font-size: 13px;
-			color: var(--ink-2);
-			font-variant-numeric: tabular-nums;
-		}
-
-		.conn .led {
-			width: 8px;
-			height: 8px;
-			border-radius: 50%;
-			background: var(--muted);
-		}
-
-		.conn.live .led {
-			background: var(--good);
-			box-shadow: 0 0 8px var(--good);
-		}
-
-		.conn.down .led {
-			background: var(--critical);
-		}
-
-		.clock {
-			color: var(--muted);
-			font-size: 13px;
-			font-variant-numeric: tabular-nums;
-		}
-
-		/* ---------- Main grid ---------- */
-		main {
-			display: grid;
-			gap: var(--gap);
-			padding: var(--gap);
-			grid-template-columns: minmax(0, 1fr) 340px;
-			grid-template-rows: minmax(0, 1fr) auto;
-			grid-template-areas: "video side" "tele side";
-			min-height: 0;
-		}
-
-		.panel {
-			background: var(--surface);
-			border: 1px solid var(--hairline);
-			border-radius: var(--radius);
-			min-height: 0;
-		}
-
-		.panel-title {
-			display: flex;
-			align-items: center;
-			gap: 8px;
-			font-size: 12px;
-			letter-spacing: .12em;
-			text-transform: uppercase;
-			color: var(--muted);
-			padding: 12px 14px 0;
-		}
-
-		/* ---------- Video ---------- */
-		.video {
-			grid-area: video;
-			position: relative;
-			overflow: hidden;
-			background: #000;
-		}
-
-		.video canvas {
-			position: absolute;
-			inset: 0;
-			width: 100%;
-			height: 100%;
-			object-fit: contain;
-			display: block;
-		}
-
-		.video .chips {
-			position: absolute;
-			top: 12px;
-			left: 12px;
-			display: flex;
-			gap: 8px;
-		}
-
-		.chip {
-			display: inline-flex;
-			align-items: center;
-			gap: 6px;
-			padding: 5px 10px;
-			border-radius: 8px;
-			font-size: 12px;
-			background: #000a;
-			backdrop-filter: blur(4px);
-			color: var(--ink-2);
-			font-variant-numeric: tabular-nums;
-			border: 1px solid var(--hairline-2);
-		}
-
-		.chip b {
-			color: var(--ink);
-			font-weight: 600;
-		}
-
-		.rec {
-			position: absolute;
-			top: 12px;
-			right: 12px;
-			display: flex;
-			align-items: center;
-			gap: 6px;
-			font-size: 12px;
-			color: var(--ink-2);
-			background: #000a;
-			padding: 5px 10px;
-			border-radius: 8px;
-		}
-
-		.rec .dot {
-			width: 8px;
-			height: 8px;
-			border-radius: 50%;
-			background: var(--critical);
-			animation: pulse 1.4s infinite;
-		}
-
-		.noSignal {
-			position: absolute;
-			inset: 0;
-			display: none;
-			flex-direction: column;
-			align-items: center;
-			justify-content: center;
-			gap: 10px;
-			color: var(--muted);
-			background: repeating-linear-gradient(45deg, #0e0e0e, #0e0e0e 12px, #111 12px, #111 24px);
-		}
-
-		.noSignal.show {
-			display: flex;
-		}
-
-		.noSignal .big {
-			font-size: 15px;
-			letter-spacing: .18em;
-			color: var(--ink-2);
-		}
-
-		.noSignal .sub {
-			font-size: 12px;
-		}
-
-		/* ---------- Telemetry ---------- */
-		.tele {
-			grid-area: tele;
-			padding-bottom: 14px;
-		}
-
-		.meters {
-			display: grid;
-			gap: 12px;
-			padding: 10px 16px 4px;
-		}
-
-		.meter {
-			display: grid;
-			grid-template-columns: 92px 1fr 64px;
-			align-items: center;
-			gap: 12px;
-		}
-
-		.meter .lbl {
-			font-size: 13px;
-			color: var(--ink-2);
-		}
-
-		.meter .lbl small {
-			display: block;
-			color: var(--muted);
-			font-size: 11px;
-		}
-
-		.track {
-			position: relative;
-			height: 10px;
-			border-radius: 6px;
-			background: var(--surface-2);
-			overflow: hidden;
-		}
-
-		.track::before {
-			/* center baseline */
-			content: "";
-			position: absolute;
-			left: 50%;
-			top: 0;
-			bottom: 0;
-			width: 2px;
-			background: var(--hairline);
-			transform: translateX(-1px);
-		}
-
-		.track .fill {
-			position: absolute;
-			top: 0;
-			bottom: 0;
-			border-radius: 6px;
-			transition: width .05s linear, left .05s linear;
-		}
-
-		.meter .val {
-			text-align: right;
-			font-size: 14px;
-			font-variant-numeric: tabular-nums;
-			color: var(--ink);
-		}
-
-		/* ---------- Side column ---------- */
-		.side {
-			grid-area: side;
-			display: grid;
-			grid-template-rows: auto auto 1fr;
-			gap: var(--gap);
-			min-height: 0;
-		}
-
-		.side>.panel {
-			display: flex;
-			flex-direction: column;
-		}
-
-		/* Safety */
-		.safety {
-			padding: 14px;
-			display: grid;
-			gap: 12px;
-		}
-
-		.estop {
-			appearance: none;
-			border: none;
-			cursor: pointer;
-			width: 100%;
-			padding: 16px;
-			border-radius: 12px;
-			font-size: 16px;
-			font-weight: 750;
-			letter-spacing: .12em;
-			color: #fff;
-			background: var(--critical);
-			box-shadow: 0 0 0 4px color-mix(in srgb, var(--critical) 22%, transparent), inset 0 -3px 0 #0004;
-			transition: transform .05s;
-		}
-
-		.estop:active {
-			transform: translateY(1px);
-		}
-
-		.reset {
-			appearance: none;
-			border: 1px solid var(--hairline);
-			cursor: pointer;
-			width: 100%;
-			padding: 11px;
-			border-radius: 10px;
-			font-size: 13px;
-			font-weight: 650;
-			letter-spacing: .06em;
-			color: var(--ink-2);
-			background: var(--surface-2);
-			transition: all .08s;
-		}
-
-		.reset:hover {
-			color: var(--ink);
-			border-color: var(--accent);
-		}
-
-		.reset:active {
-			transform: translateY(1px);
-		}
-
-		.reason {
-			padding: 0 14px 12px;
-			font-size: 12px;
-			color: var(--muted);
-			min-height: 1.2em;
-		}
-
-		.deadman {
-			appearance: none;
-			cursor: pointer;
-			width: 100%;
-			padding: 13px;
-			border-radius: 10px;
-			font-size: 14px;
-			font-weight: 650;
-			letter-spacing: .06em;
-			user-select: none;
-			color: var(--ink-2);
-			background: var(--surface-2);
-			border: 1px solid var(--hairline);
-			transition: all .08s;
-		}
-
-		.deadman.armed {
-			color: #06210a;
-			background: var(--good);
-			border-color: transparent;
-			box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent);
-		}
-
-		.deadman small {
-			display: block;
-			font-weight: 500;
-			font-size: 11px;
-			opacity: .8;
-			margin-top: 2px;
-		}
-
-		/* State tiles */
-		.tiles {
-			display: grid;
-			grid-template-columns: 1fr 1fr;
-			gap: 10px;
-			padding: 0 14px 14px;
-		}
-
-		.tile {
-			border: 1px solid var(--hairline);
-			border-radius: 10px;
-			padding: 11px 12px;
-			background: var(--surface-2);
-			display: grid;
-			gap: 4px;
-		}
-
-		.tile .k {
-			font-size: 11px;
-			color: var(--muted);
-			letter-spacing: .04em;
-		}
-
-		.tile .v {
-			display: flex;
-			align-items: center;
-			gap: 7px;
-			font-size: 14px;
-			font-weight: 650;
-		}
-
-		.tile .v .ic {
-			width: 9px;
-			height: 9px;
-			border-radius: 50%;
-			background: var(--muted);
-			flex: none;
-		}
-
-		.tile[data-s="good"] .v .ic {
-			background: var(--good);
-			box-shadow: 0 0 7px var(--good);
-		}
-
-		.tile[data-s="good"] .v {
-			color: #7fe07f;
-		}
-
-		.tile[data-s="warning"] .v .ic {
-			background: var(--warning);
-		}
-
-		.tile[data-s="warning"] .v {
-			color: var(--warning);
-		}
-
-		.tile[data-s="critical"] .v .ic {
-			background: var(--critical);
-		}
-
-		.tile[data-s="critical"] .v {
-			color: #f08b8b;
-		}
-
-		/* Controls */
-		.controls {
-			padding: 14px;
-			display: grid;
-			gap: 14px;
-			overflow: auto;
-		}
-
-		.dpad {
-			display: grid;
-			grid-template-columns: repeat(3, 1fr);
-			gap: 8px;
-			max-width: 220px;
-			margin: 0 auto;
-		}
-
-		.dpad button {
-			appearance: none;
-			border: 1px solid var(--hairline);
-			background: var(--surface-2);
-			color: var(--ink-2);
-			border-radius: 10px;
-			height: 46px;
-			font-size: 18px;
-			cursor: pointer;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			user-select: none;
-			transition: all .06s;
-		}
-
-		.dpad button:active,
-		.dpad button.on {
-			background: var(--accent);
-			color: #fff;
-			border-color: transparent;
-		}
-
-		.dpad .empty {
-			visibility: hidden;
-		}
-
-		.dpad small {
-			font-size: 9px;
-		}
-
-		.row {
-			display: grid;
-			gap: 6px;
-		}
-
-		.row label {
-			font-size: 12px;
-			color: var(--muted);
-			display: flex;
-			justify-content: space-between;
-		}
-
-		.row label b {
-			color: var(--ink-2);
-			font-weight: 600;
-			font-variant-numeric: tabular-nums;
-		}
-
-		input[type=range] {
-			width: 100%;
-			accent-color: var(--accent);
-		}
-
-		.hints {
-			font-size: 11px;
-			color: var(--muted);
-			line-height: 1.7;
-		}
-
-		.kbd {
-			display: inline-block;
-			padding: 1px 6px;
-			border: 1px solid var(--hairline);
-			border-radius: 5px;
-			background: var(--surface-2);
-			color: var(--ink-2);
-			font-size: 11px;
-			font-family: ui-monospace, monospace;
-		}
-
-		/* Joystick */
-		.joy-head {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 8px;
-			cursor: pointer;
-			user-select: none;
-		}
-
-		.joy-head .name {
-			color: var(--muted);
-			font-weight: 400;
-			text-transform: none;
-			letter-spacing: 0;
-			font-size: 11px;
-		}
-
-		.joy-chevron {
-			color: var(--muted);
-			font-size: 11px;
-			transition: transform .15s;
-		}
-
-		.joy-chevron.open {
-			transform: rotate(90deg);
-		}
-
-		.joy-body {
-			display: none;
-			padding: 12px 14px 14px;
-			gap: 10px;
-			overflow: auto;
-		}
-
-		.joy-body.open {
-			display: grid;
-		}
-
-		.joy-raw {
-			font-size: 10.5px;
-			color: var(--muted);
-			font-family: ui-monospace, monospace;
-			line-height: 1.6;
-			background: var(--surface-2);
-			border-radius: 8px;
-			padding: 7px 9px;
-			word-break: break-all;
-		}
-
-		.joy-row {
-			display: flex;
-			align-items: center;
-			gap: 8px;
-			font-size: 12px;
-		}
-
-		.joy-row .lbl {
-			flex: 1;
-			color: var(--ink-2);
-		}
-
-		.joy-row .val {
-			width: 60px;
-			text-align: right;
-			font-variant-numeric: tabular-nums;
-			color: var(--ink);
-			font-size: 11px;
-		}
-
-		.joy-row .inv {
-			display: flex;
-			align-items: center;
-			gap: 4px;
-			color: var(--muted);
-			font-size: 11px;
-			white-space: nowrap;
-		}
-
-		.joy-row .assign {
-			appearance: none;
-			border: 1px solid var(--hairline);
-			background: var(--surface-2);
-			color: var(--ink-2);
-			border-radius: 7px;
-			padding: 4px 9px;
-			font-size: 11px;
-			cursor: pointer;
-			white-space: nowrap;
-		}
-
-		.joy-row .assign.listening {
-			background: var(--accent);
-			color: #fff;
-			border-color: transparent;
-			animation: pulse 1s infinite;
-		}
-
-		.joy-reset {
-			appearance: none;
-			border: 1px solid var(--hairline);
-			background: none;
-			color: var(--muted);
-			border-radius: 7px;
-			padding: 6px;
-			font-size: 11px;
-			cursor: pointer;
-			justify-self: start;
-		}
-
-		.joy-reset:hover {
-			color: var(--ink-2);
-		}
-
-		/* E-stop banner */
-		.banner {
-			display: none;
-			position: fixed;
-			inset: 0 0 auto 0;
-			z-index: 20;
-			padding: 12px;
-			text-align: center;
-			font-weight: 700;
-			letter-spacing: .1em;
-			color: #fff;
-			background: var(--critical);
-			animation: pulse 1.2s infinite;
-		}
-
-		.banner.show {
-			display: block;
-		}
-
-		@keyframes pulse {
-
-			0%,
-			100% {
-				opacity: 1;
-			}
-
-			50% {
-				opacity: .55;
-			}
-		}
-
-		/* ---------- Responsive ---------- */
-		@media (max-width: 900px) {
-			body {
-				overflow: auto;
-			}
-
-			.app {
-				height: auto;
-			}
-
-			main {
-				grid-template-columns: 1fr;
-				grid-template-rows: none;
-				grid-template-areas: "video" "side" "tele";
-				height: auto;
-			}
-
-			.video {
-				aspect-ratio: 4 / 3;
-			}
-
-			.side {
-				grid-template-rows: none;
-			}
-		}
-	</style>
+	<link rel="icon"
+		href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+	<link rel="stylesheet" href="/static/app.css">
 </head>
 
 <body>
@@ -741,20 +16,33 @@
 
 	<div class="app">
 		<header>
-			<div class="brand"><span class="dot" id="brandDot"></span>Roby <small>· Téléopération</small></div>
+			<div class="brand"><span class="dot" id="brandDot"></span>Roby <small>Téléopération</small></div>
 			<div class="header-spacer"></div>
 			<span class="conn" id="conn"><span class="led"></span><span id="connText">connexion…</span></span>
 			<span class="clock" id="clock">--:--:--</span>
+			<button class="icon-btn" id="btnHelp" title="Raccourcis clavier (?)" aria-label="Aide">?</button>
+			<button class="icon-btn" id="btnSettings" title="Réglages" aria-label="Réglages">
+				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"
+					stroke-linecap="round" stroke-linejoin="round">
+					<circle cx="12" cy="12" r="3.2" />
+					<path
+						d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.08A1.7 1.7 0 0 0 10 4.09V4a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03z" />
+				</svg>
+			</button>
 		</header>
 
 		<main>
 			<!-- Video -->
-			<section class="panel video" aria-label="Caméra">
+			<section class="panel video" id="videoPanel" aria-label="Caméra">
 				<canvas id="cam" role="img" aria-label="Flux caméra robot"></canvas>
 				<div class="chips">
 					<span class="chip"><span>FPS</span><b id="fps">–</b></span>
-					<span class="chip"><span>latence</span><b id="age">–</b></span>
+					<span class="chip" id="chipAge"><span>latence</span><b id="age">–</b></span>
 					<span class="chip"><span>caméra avant</span></span>
+				</div>
+				<div class="video-actions">
+					<button class="icon-btn ghost" id="btnFit" title="Ajustement vidéo (contain / cover)">⤢</button>
+					<button class="icon-btn ghost" id="btnFullscreen" title="Plein écran (F)">⛶</button>
 				</div>
 				<div class="rec"><span class="dot"></span>LIVE</div>
 				<div class="noSignal show" id="noSignal">
@@ -793,38 +81,34 @@
 							<div class="k">État base</div>
 							<div class="v"><span class="ic"></span><span>—</span></div>
 						</div>
-						<div class="tile" id="t-arm" data-s="warning">
+						<div class="tile wide" id="t-arm" data-s="warning">
 							<div class="k">Bras</div>
 							<div class="v"><span class="ic"></span><span>—</span></div>
 						</div>
 					</div>
 					<div class="reason" id="reasonLine"></div>
-					<div class="reason" id="armJointsLine"></div>
+					<div class="arm-joints" id="armJoints"></div>
 				</section>
 
 				<!-- Controls -->
 				<section class="panel">
 					<div class="panel-title">Contrôles</div>
 					<div class="controls">
-						<div class="row" id="browserCtrlRow">
-							<label style="flex-direction:row; align-items:center; gap:8px; cursor:pointer;">
-								<input type="checkbox" id="browserCtrl">
-								<span>Piloter depuis ce navigateur</span>
-							</label>
-							<div class="hints" style="margin-top:2px;">
-								Décoché par défaut : si <span class="kbd">input_agent.py</span> (manette physique)
-								pilote déjà le robot, laisser cette case décochée — sinon les deux
-								se battent sur les mêmes commandes et le robot ne bouge plus du tout.
-							</div>
-						</div>
+						<label class="switch-row" id="browserCtrlRow">
+							<span class="switch"><input type="checkbox" id="browserCtrl"><i></i></span>
+							<span class="switch-lbl">Piloter depuis ce navigateur
+								<small>à laisser désactivé si <span class="kbd">input_agent.py</span> pilote déjà le
+									robot (conflit de topics).</small>
+							</span>
+						</label>
 						<div class="dpad">
 							<button class="empty"></button>
-							<button data-k="fwd">↑<small>W</small></button>
+							<button data-k="fwd">↑<small>W·Z</small></button>
 							<button class="empty"></button>
-							<button data-k="rotL">↺<small>A</small></button>
+							<button data-k="rotL">↺<small>A·Q</small></button>
 							<button data-k="back">↓<small>S</small></button>
 							<button data-k="rotR">↻<small>D</small></button>
-							<button data-k="left">⇦<small>Q</small></button>
+							<button data-k="left">⇦<small>Q·A</small></button>
 							<button class="empty"></button>
 							<button data-k="right">⇨<small>E</small></button>
 						</div>
@@ -837,11 +121,9 @@
 							<input type="range" id="grip" min="0" max="100" value="0">
 						</div>
 						<div class="hints">
-							<span class="kbd">W</span>/<span class="kbd">S</span> avant·arrière ·
-							<span class="kbd">A</span>/<span class="kbd">D</span> rotation ·
-							<span class="kbd">Q</span>/<span class="kbd">E</span> latéral ·
-							<span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt · <span
-								class="kbd">R</span> réarmer
+							positions <b>WASD / ZQSD</b> (physiques, indépendantes du layout clavier) ·
+							<span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt ·
+							<span class="kbd">R</span> réarmer · <span class="kbd">?</span> aide
 						</div>
 					</div>
 				</section>
@@ -853,15 +135,35 @@
 						<span class="joy-chevron" id="joyChevron">▸</span>
 					</div>
 					<div class="joy-body" id="joyBody">
+						<div class="joy-select-row">
+							<label for="joySelect">Manette active</label>
+							<select id="joySelect">
+								<option value="auto">auto (première détectée)</option>
+							</select>
+						</div>
 						<div class="joy-raw" id="joyRaw">en attente d'une manette…</div>
 						<div id="joyRows"></div>
 						<button class="joy-reset" id="joyResetMap">↺ réinitialiser le mapping</button>
 					</div>
 				</section>
+
+				<!-- GELLO (Web Serial) -->
+				<section class="panel" id="gelloPanel">
+					<div class="panel-title joy-head" id="gelloHead">
+						<span>Bras (GELLO) <span class="name" id="gelloStatusName">— non connecté</span></span>
+						<span class="joy-chevron" id="gelloChevron">▸</span>
+					</div>
+					<div class="joy-body" id="gelloBody">
+						<div id="gelloKnownPorts"></div>
+						<button class="joy-reset" id="gelloConnect">🔌 connecter un nouveau port…</button>
+						<div class="joy-raw" id="gelloRaw">non connecté — nécessite Chrome/Edge, page ouverte en
+							http://localhost:8080 sur le PC où le GELLO est branché</div>
+					</div>
+				</section>
 			</div>
 
 			<!-- Telemetry -->
-			<section class="panel tele">
+			<section class="panel tele" id="telePanel">
 				<div class="panel-title">Télémétrie — commande base (normalisée)</div>
 				<div class="meters">
 					<div class="meter">
@@ -890,425 +192,175 @@
 		</main>
 	</div>
 
-	<script>
-		(() => {
-			const $ = (id) => document.getElementById(id);
-			const host = location.host;
+	<!-- Settings modal -->
+	<div class="modal-overlay" id="settingsModal" hidden>
+		<div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+			<div class="modal-head">
+				<h2 id="settingsTitle">Réglages</h2>
+				<button class="icon-btn" id="btnCloseSettings" aria-label="Fermer">✕</button>
+			</div>
+			<div class="modal-body">
+				<nav class="tabs" id="settingsTabs">
+					<button data-tab="control" class="on">Contrôle</button>
+					<button data-tab="joystick">Manette</button>
+					<button data-tab="gello">GELLO</button>
+					<button data-tab="ui">Interface</button>
+				</nav>
+				<div class="panes">
+					<div class="pane on" data-pane="control">
+						<div class="field">
+							<label>Fréquence d'envoi des commandes <b data-out="control.rateHz">20 Hz</b></label>
+							<input type="range" data-cfg="control.rateHz" data-unit=" Hz" min="10" max="50" step="5">
+							<small>doit rester nettement sous le timeout du watchdog robot
+								(<span class="kbd">CMD_TIMEOUT_SEC</span>) — 20 Hz par défaut.</small>
+						</div>
+						<div class="field">
+							<label>Vitesse max au chargement <b data-out="control.defaultSpeed">60 %</b></label>
+							<input type="range" data-cfg="control.defaultSpeed" data-scale="100" data-unit=" %"
+								min="0.1" max="1" step="0.05">
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="control.rememberSpeed">
+								mémoriser la dernière vitesse entre les sessions</label>
+						</div>
+						<div class="field">
+							<label>Pas de la pince (boutons manette) <b data-out="control.gripStep">2 %</b></label>
+							<input type="range" data-cfg="control.gripStep" data-scale="100" data-unit=" %"
+								min="0.005" max="0.05" step="0.005">
+						</div>
+					</div>
+					<div class="pane" data-pane="joystick">
+						<div class="field">
+							<label>Zone morte des axes <b data-out="joystick.deadzone">0.08</b></label>
+							<input type="range" data-cfg="joystick.deadzone" data-fixed="2" min="0" max="0.3"
+								step="0.01">
+							<small>en dessous de cette amplitude, l'axe est lu comme zéro (anti-dérive).</small>
+						</div>
+						<div class="field">
+							<small>l'assignation axe/bouton par action se fait dans le panneau <b>Manette</b> de la
+								page principale (valeurs brutes visibles en direct pendant l'assignation).</small>
+						</div>
+					</div>
+					<div class="pane" data-pane="gello">
+						<div class="field">
+							<label>Débit série</label>
+							<select data-cfg="gello.baudRate" data-type="int">
+								<option value="57600">57600</option>
+								<option value="115200">115200 (défaut)</option>
+								<option value="230400">230400</option>
+							</select>
+						</div>
+						<div class="field">
+							<label>Délai de boot Arduino <b data-out="gello.bootDelayMs">2500 ms</b></label>
+							<input type="range" data-cfg="gello.bootDelayMs" data-unit=" ms" min="0" max="5000"
+								step="100">
+							<small>l'ouverture du port réinitialise l'Arduino (DTR) — délai avant d'écrire, identique à
+								gello_reader.py.</small>
+						</div>
+						<div class="field">
+							<label>Lissage exponentiel <b data-out="gello.smoothing">0.15</b></label>
+							<input type="range" data-cfg="gello.smoothing" data-fixed="2" min="0.05" max="1"
+								step="0.05">
+							<small>plus bas = plus lisse mais plus de latence sur le bras.</small>
+						</div>
+						<div class="field">
+							<label>Marge aux butées <b data-out="gello.rangeMarginDeg">5°</b></label>
+							<input type="range" data-cfg="gello.rangeMarginDeg" data-unit="°" min="0" max="15"
+								step="1">
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="gello.autoConnect">
+								reconnexion automatique au chargement de la page (dernier port autorisé)</label>
+						</div>
+					</div>
+					<div class="pane" data-pane="ui">
+						<div class="field">
+							<label>Ajustement vidéo</label>
+							<select data-cfg="ui.videoFit">
+								<option value="contain">contain — image entière</option>
+								<option value="cover">cover — remplit le cadre</option>
+							</select>
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="ui.showTelemetry">
+								afficher la télémétrie (jauges vx / vy / wz)</label>
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="ui.showArmJoints">
+								afficher les angles du bras</label>
+						</div>
+						<div class="field">
+							<label>Seuil « signal perdu » <b data-out="ui.staleMs">1000 ms</b></label>
+							<input type="range" data-cfg="ui.staleMs" data-unit=" ms" min="300" max="3000" step="100">
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="modal-foot">
+				<button class="btn" id="btnExport">⇩ Exporter</button>
+				<button class="btn" id="btnImport">⇧ Importer</button>
+				<input type="file" id="importFile" accept="application/json" hidden>
+				<span class="foot-spacer"></span>
+				<button class="btn danger" id="btnResetCfg">Réinitialiser</button>
+			</div>
+		</div>
+	</div>
 
-			// ---- Auto-reconnecting WebSocket helper ----
-			function ws(path, onmsg, onopen, binary) {
-				let sock, alive = false;
-				const connect = () => {
-					sock = new WebSocket(`ws://${host}${path}`);
-					if (binary) sock.binaryType = "arraybuffer";
-					sock.onopen = () => { alive = true; onopen && onopen(sock); };
-					sock.onmessage = onmsg;
-					sock.onclose = () => { alive = false; setTimeout(connect, 800); };
-					sock.onerror = () => sock.close();
-				};
-				connect();
-				return { send: (o) => { if (alive) sock.send(JSON.stringify(o)); }, isAlive: () => alive };
-			}
+	<!-- Help modal -->
+	<div class="modal-overlay" id="helpModal" hidden>
+		<div class="modal small" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+			<div class="modal-head">
+				<h2 id="helpTitle">Raccourcis clavier</h2>
+				<button class="icon-btn" id="btnCloseHelp" aria-label="Fermer">✕</button>
+			</div>
+			<div class="modal-body help-body">
+				<table class="help-table">
+					<tr>
+						<td><span class="kbd">Espace</span> (maintenu)</td>
+						<td>homme-mort — obligatoire pour bouger</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">W·Z</span> / <span class="kbd">S</span></td>
+						<td>avant / arrière</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">A·Q</span> / <span class="kbd">D</span></td>
+						<td>rotation gauche / droite</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">Q·A</span> / <span class="kbd">E</span></td>
+						<td>latéral gauche / droite</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">↑↓←→</span></td>
+						<td>avant / arrière / rotation</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">X</span></td>
+						<td>arrêt d'urgence</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">R</span></td>
+						<td>réarmer</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">F</span></td>
+						<td>vidéo plein écran</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">?</span></td>
+						<td>cette aide</td>
+					</tr>
+				</table>
+				<p class="help-note">Les touches lettres sont détectées par <b>position physique</b>
+					(<span class="kbd">event.code</span>) : le même geste fonctionne en QWERTY et en AZERTY.</p>
+			</div>
+		</div>
+	</div>
 
-			// ---- Camera ----
-			const cam = $("cam"), noSignal = $("noSignal");
-			const camCtx = cam.getContext("2d");
-			let lastFrame = 0, frameStamps = [];
-			// Receiving a frame and displaying it are deliberately decoupled: onmessage
-			// just stashes the latest ArrayBuffer (cheap), a requestAnimationFrame loop
-			// does the actual decode/paint work. If the main thread is ever busy
-			// (gamepad polling, other WS handlers, a GC pause) and several frames pile
-			// up in the WS event queue, onmessage still drains them all in order --
-			// but only the LAST one is ever rendered, so a momentary stall can no
-			// longer turn into a growing backlog of stale frames displayed late one
-			// after another (that was the actual cause of latency drifting from
-			// ~200ms up to ~0.5s instead of staying flat).
-			let latestCamData = null, camDataSeq = 0, displayedSeq = -1, renderingCam = false;
-			const camSock = ws("/ws/camera", (e) => {
-				latestCamData = e.data;
-				camDataSeq++;
-				const now = performance.now();
-				lastFrame = now; frameStamps.push(now);
-				if (frameStamps.length > 30) frameStamps.shift();
-			}, null, true);
+	<div class="toasts" id="toasts"></div>
 
-			async function renderCamFrame() {
-				if (camDataSeq !== displayedSeq && latestCamData && !renderingCam) {
-					displayedSeq = camDataSeq;
-					renderingCam = true;
-					// Binary frames straight into createImageBitmap + canvas: skips both
-					// the ~33% base64 size overhead of a data URI AND the Blob-URL
-					// create/revoke bookkeeping an <img> would need.
-					try {
-						const bitmap = await createImageBitmap(new Blob([latestCamData], { type: "image/jpeg" }));
-						if (cam.width !== bitmap.width || cam.height !== bitmap.height) {
-							cam.width = bitmap.width;
-							cam.height = bitmap.height;
-						}
-						camCtx.drawImage(bitmap, 0, 0);
-						bitmap.close();
-					} finally {
-						renderingCam = false;
-					}
-				}
-				requestAnimationFrame(renderCamFrame);
-			}
-			requestAnimationFrame(renderCamFrame);
-
-			// ---- Status (robot heartbeat + reported state) ----
-			// state schema published by robot/robot_agent.py:
-			//   {moving, estop, deadman_ok, fresh_cmd, ts}
-			let robotState = {};
-			const setTile = (id, status, text) => {
-				const t = $(id); t.dataset.s = status;
-				t.querySelector(".v span:last-child").textContent = text;
-			};
-			const statusSock = ws("/ws/status", (e) => {
-				const s = JSON.parse(e.data);
-				robotState = s.state || {};
-				setTile("t-robot", s.robot ? "good" : "critical", s.robot ? "ACTIF" : "PERDU");
-				$("brandDot").style.background = s.robot ? "var(--good)" : "var(--critical)";
-
-				const estop = !!robotState.estop;
-				$("banner").classList.toggle("show", estop);
-				$("banner").textContent = estop
-					? "⚠ ARRÊT D'URGENCE ACTIF — cliquer RÉARMER puis ré-activer le homme-mort"
-					: '';
-				setTile("t-fsm",
-					estop ? "critical" : (robotState.moving ? "good" : "warning"),
-					estop ? "E-STOP" : (robotState.moving ? "EN MOUVEMENT" : "ARRÊT"));
-				$("reasonLine").textContent = (!estop && !robotState.moving)
-					? `homme-mort : ${robotState.deadman_ok ? "oui" : "non"} · commande : ${robotState.fresh_cmd ? "fraîche" : "périmée"}`
-					: '';
-
-				// arm state schema published by robot/arm_agent.py (relayed as-is,
-				// empty object once stale -- see web_server.py):
-				//   {connected, moving, fresh_cmd, estop, joints, ts}
-				const armState = s.arm || {};
-				const armEstop = !!armState.estop;
-				setTile("t-arm",
-					!armState.connected ? "critical" : (armEstop ? "critical" : (armState.moving ? "good" : "warning")),
-					!armState.connected ? "DÉCONNECTÉ" : (armEstop ? "E-STOP" : (armState.moving ? "EN MOUVEMENT" : "INACTIF")));
-				const joints = armState.joints || {};
-				$("armJointsLine").textContent = Object.keys(joints).length
-					? Object.entries(joints).map(([k, v]) => `${k}:${v.toFixed(0)}°`).join("  ")
-					: '';
-			});
-
-			// ---- Connection badge (server link) ----
-			setInterval(() => {
-				const up = camSock.isAlive() || statusSock.isAlive() || ctrlSock.isAlive();
-				const c = $("conn");
-				c.className = "conn " + (up ? "live" : "down");
-				$("connText").textContent = up ? "serveur connecté" : "reconnexion…";
-			}, 500);
-
-			// ---- Clock + camera freshness (client-side) ----
-			setInterval(() => {
-				$("clock").textContent = new Date().toLocaleTimeString("fr-FR");
-				const now = performance.now();
-				const age = lastFrame ? now - lastFrame : Infinity;
-				const lost = age > 1000;
-				noSignal.classList.toggle("show", lost);
-				setTile("t-cam", lost ? "critical" : "good", lost ? "PERDUE" : "OK");
-				$("age").textContent = lost ? "—" : Math.round(age) + " ms";
-				// fps over the retained window
-				if (frameStamps.length > 1 && !lost) {
-					const span = (frameStamps[frameStamps.length - 1] - frameStamps[0]) / 1000;
-					$("fps").textContent = span > 0 ? (frameStamps.length - 1) / span < 1
-						? "<1" : Math.round((frameStamps.length - 1) / span) : "–";
-				} else $("fps").textContent = "–";
-			}, 250);
-
-			// ================= CONTROL =================
-			const ctrlSock = ws("/ws/control", () => { });
-
-			const keys = { fwd: 0, back: 0, left: 0, right: 0, rotL: 0, rotR: 0 };
-			let deadman = false, speed = 0.60, gripper = 0.0;
-
-			const KEYMAP = {
-				w: "fwd", s: "back", q: "left", e: "right", a: "rotL", d: "rotR",
-				arrowup: "fwd", arrowdown: "back", arrowleft: "rotL", arrowright: "rotR"
-			};
-
-			const setDeadman = (v) => {
-				deadman = v;
-				$("deadman").classList.toggle("armed", v);
-			};
-
-			document.addEventListener("keydown", (ev) => {
-				const k = ev.key.toLowerCase();
-				if (k === " ") { ev.preventDefault(); setDeadman(true); return; }
-				if (k === "x") { triggerStop(); return; }
-				if (k === "r") { ctrlSock.send({ type: "reset" }); return; }
-				if (KEYMAP[k]) { ev.preventDefault(); keys[KEYMAP[k]] = 1; highlight(KEYMAP[k], true); }
-			});
-			document.addEventListener("keyup", (ev) => {
-				const k = ev.key.toLowerCase();
-				if (k === " ") { setDeadman(false); return; }
-				if (KEYMAP[k]) { keys[KEYMAP[k]] = 0; highlight(KEYMAP[k], false); }
-			});
-			// Release everything if the tab loses focus (safety).
-			window.addEventListener("blur", () => {
-				for (const k in keys) keys[k] = 0;
-				setDeadman(false);
-				document.querySelectorAll(".dpad button").forEach(b => b.classList.remove("on"));
-			});
-
-			const highlight = (k, on) =>
-				document.querySelectorAll(`.dpad button[data-k="${k}"]`).forEach(b => b.classList.toggle("on", on));
-
-			// On-screen d-pad (pointer = works on touch + mouse)
-			document.querySelectorAll(".dpad button[data-k]").forEach(btn => {
-				const k = btn.dataset.k;
-				const down = (e) => { e.preventDefault(); keys[k] = 1; btn.classList.add("on"); };
-				const up = () => { keys[k] = 0; btn.classList.remove("on"); };
-				btn.addEventListener("pointerdown", down);
-				btn.addEventListener("pointerup", up);
-				btn.addEventListener("pointerleave", up);
-				btn.addEventListener("pointercancel", up);
-			});
-
-			// Deadman on-screen button (hold)
-			const dm = $("deadman");
-			dm.addEventListener("pointerdown", (e) => { e.preventDefault(); setDeadman(true); });
-			dm.addEventListener("pointerup", () => setDeadman(false));
-			dm.addEventListener("pointerleave", () => setDeadman(false));
-			dm.addEventListener("pointercancel", () => setDeadman(false));
-
-			// E-stop
-			const triggerStop = () => { ctrlSock.send({ type: "stop" }); };
-			$("estop").addEventListener("click", triggerStop);
-			$("reset").addEventListener("click", () => ctrlSock.send({ type: "reset" }));
-
-			// Speed + gripper sliders
-			$("spd").addEventListener("input", (e) => { speed = e.target.value / 100; $("spdVal").textContent = e.target.value + " %"; });
-			let gripTimer = 0;
-			function setGripper(v) {
-				gripper = Math.min(1, Math.max(0, v));
-				$("grip").value = Math.round(gripper * 100);
-				$("gripVal").textContent = gripper < 0.05 ? "ouverte" : gripper > 0.95 ? "fermée" : Math.round(gripper * 100) + " %";
-				clearTimeout(gripTimer);
-				gripTimer = setTimeout(() => ctrlSock.send({ type: "gripper", value: gripper }), 40);
-			}
-			$("grip").addEventListener("input", (e) => setGripper(e.target.value / 100));
-
-			// ================= JOYSTICK (Gamepad API) =================
-			// Manette testée : Thrustmaster T.Flight Stick X (4 axes, 12 boutons, 1 hat).
-			// Mapping entièrement dynamique : cliquer "Assigner" puis bouger l'axe ou
-			// appuyer sur le bouton physique l'assigne. Persisté en localStorage.
-			const AXIS_DEADZONE = 0.08;
-			const JOY_KEY = "roby.joystick.mapping.v1";
-			const JOY_DEFAULTS = {
-				axisVx: 1, invVx: true,
-				axisVy: 0, invVy: false,
-				axisWz: 2, invWz: false,
-				axisSpeed: 3, invSpeed: false,
-				btnDeadman: 0, btnStop: 1, btnReset: 2, btnGripOpen: 3, btnGripClose: 4,
-			};
-			const JOY_ACTIONS = [
-				{ key: "axisVx", label: "Avant / arrière", kind: "axis", invKey: "invVx" },
-				{ key: "axisVy", label: "Latéral", kind: "axis", invKey: "invVy" },
-				{ key: "axisWz", label: "Rotation", kind: "axis", invKey: "invWz" },
-				{ key: "axisSpeed", label: "Vitesse max (slider)", kind: "axis", invKey: "invSpeed" },
-				{ key: "btnDeadman", label: "Homme-mort", kind: "button" },
-				{ key: "btnStop", label: "Arrêt d'urgence", kind: "button" },
-				{ key: "btnReset", label: "Réarmer", kind: "button" },
-				{ key: "btnGripOpen", label: "Pince : ouvrir", kind: "button" },
-				{ key: "btnGripClose", label: "Pince : fermer", kind: "button" },
-			];
-
-			let joyMap = { ...JOY_DEFAULTS };
-			try { Object.assign(joyMap, JSON.parse(localStorage.getItem(JOY_KEY) || "{}")); } catch { }
-			const saveJoyMap = () => localStorage.setItem(JOY_KEY, JSON.stringify(joyMap));
-
-			let learningKey = null;
-			let joyIndex = null;
-			let prevJoyButtons = [];
-
-			const joyHead = $("joyHead"), joyBody = $("joyBody"), joyChevron = $("joyChevron"), joyName = $("joyName");
-			joyHead.addEventListener("click", () => {
-				const open = joyBody.classList.toggle("open");
-				joyChevron.classList.toggle("open", open);
-			});
-
-			function renderJoyRows() {
-				const wrap = $("joyRows");
-				wrap.innerHTML = "";
-				for (const a of JOY_ACTIONS) {
-					const row = document.createElement("div");
-					row.className = "joy-row";
-					const cur = joyMap[a.key];
-					const curText = (cur == null || cur < 0) ? "—" : (a.kind === "axis" ? "axe " + cur : "bouton " + cur);
-					const invHtml = a.kind === "axis"
-						? '<label class="inv"><input type="checkbox" id="joyinv-' + a.key + '"' +
-						(joyMap[a.invKey] ? " checked" : "") + '> inv.</label>'
-						: "";
-					row.innerHTML =
-						'<span class="lbl">' + a.label + '</span>' +
-						'<span class="val" id="joyval-' + a.key + '">' + curText + '</span>' +
-						invHtml +
-						'<button class="assign" data-key="' + a.key + '">Assigner</button>';
-					wrap.appendChild(row);
-					if (a.kind === "axis") {
-						$("joyinv-" + a.key).addEventListener("change", (e) => { joyMap[a.invKey] = e.target.checked; saveJoyMap(); });
-					}
-				}
-				wrap.querySelectorAll(".assign").forEach((btn) => {
-					btn.addEventListener("click", () => {
-						wrap.querySelectorAll(".assign").forEach((b) => { b.classList.remove("listening"); b.textContent = "Assigner"; });
-						learningKey = btn.dataset.key;
-						btn.classList.add("listening");
-						btn.textContent = "…appuyer / bouger";
-					});
-				});
-			}
-			renderJoyRows();
-
-			$("joyResetMap").addEventListener("click", () => {
-				joyMap = { ...JOY_DEFAULTS };
-				saveJoyMap();
-				renderJoyRows();
-			});
-
-			window.addEventListener("gamepadconnected", (e) => { joyIndex = e.gamepad.index; joyName.textContent = "— " + e.gamepad.id; });
-			window.addEventListener("gamepaddisconnected", (e) => {
-				if (joyIndex === e.gamepad.index) {
-					joyIndex = null;
-					joyName.textContent = "— non détectée";
-					$("joyRaw").textContent = "en attente d'une manette…";
-				}
-			});
-
-			function pollGamepad() {
-				const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-				let gp = joyIndex != null ? pads[joyIndex] : null;
-				if (!gp) gp = Array.prototype.find.call(pads, (p) => p) || null;
-				if (gp && joyIndex == null) { joyIndex = gp.index; joyName.textContent = "— " + gp.id; }
-				return gp;
-			}
-
-			function finishAssign(key, value) {
-				joyMap[key] = value;
-				saveJoyMap();
-				const kind = JOY_ACTIONS.find((a) => a.key === key).kind;
-				const val = $("joyval-" + key);
-				if (val) val.textContent = kind === "axis" ? "axe " + value : "bouton " + value;
-				const btn = document.querySelector('.assign[data-key="' + key + '"]');
-				if (btn) { btn.classList.remove("listening"); btn.textContent = "Assigner"; }
-				learningKey = null;
-			}
-
-			// Polled once per control tick (50 Hz) — reads gamepad state, drives the
-			// learn-mode capture, and returns the normalized contribution to send.
-			function updateJoystick() {
-				const gp = pollGamepad();
-				const out = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false };
-				if (!gp) { $("joyRaw").textContent = "en attente d'une manette…"; return out; }
-
-				const axes = gp.axes, buttons = gp.buttons;
-				const activeBtns = [];
-				for (let i = 0; i < buttons.length; i++) if (buttons[i].pressed) activeBtns.push(i);
-				let raw = "axes: ";
-				for (let i = 0; i < axes.length; i++) raw += i + ":" + axes[i].toFixed(2) + "  ";
-				raw += "  boutons actifs: " + (activeBtns.length ? activeBtns.join(",") : "—");
-				$("joyRaw").textContent = raw;
-
-				if (learningKey) {
-					const action = JOY_ACTIONS.find((a) => a.key === learningKey);
-					if (action.kind === "axis") {
-						const idx = axes.findIndex((v) => Math.abs(v) > 0.6);
-						if (idx >= 0) finishAssign(learningKey, idx);
-					} else if (activeBtns.length) {
-						finishAssign(learningKey, activeBtns[0]);
-					}
-				}
-
-				const axisVal = (idx, inv) => {
-					if (idx == null || idx < 0 || idx >= axes.length) return 0;
-					let v = axes[idx];
-					if (Math.abs(v) < AXIS_DEADZONE) v = 0;
-					return inv ? -v : v;
-				};
-				const btnHeld = (idx) => idx != null && idx >= 0 && idx < buttons.length && buttons[idx].pressed;
-
-				out.vx = axisVal(joyMap.axisVx, joyMap.invVx);
-				out.vy = axisVal(joyMap.axisVy, joyMap.invVy);
-				out.wz = axisVal(joyMap.axisWz, joyMap.invWz);
-				if (joyMap.axisSpeed != null && joyMap.axisSpeed >= 0 && joyMap.axisSpeed < axes.length) {
-					let v = axes[joyMap.axisSpeed];
-					if (joyMap.invSpeed) v = -v;
-					out.speed = Math.min(1, Math.max(0, (v + 1) / 2));
-				}
-				out.deadman = btnHeld(joyMap.btnDeadman);
-
-				const pressedNow = buttons.map((b) => b.pressed);
-				const rising = (idx) => idx != null && idx >= 0 && pressedNow[idx] && !prevJoyButtons[idx];
-				if (rising(joyMap.btnStop)) triggerStop();
-				if (rising(joyMap.btnReset)) ctrlSock.send({ type: "reset" });
-				if (btnHeld(joyMap.btnGripOpen)) setGripper(gripper - 0.02);
-				if (btnHeld(joyMap.btnGripClose)) setGripper(gripper + 0.02);
-				prevJoyButtons = pressedNow;
-
-				return out;
-			}
-
-			// ---- Meters ----
-			const setMeter = (fillId, valId, v) => {
-				const w = Math.min(Math.abs(v), 1) * 50;                 // half-width %
-				const left = v < 0 ? (50 - w) : 50;
-				const fill = $(fillId);
-				fill.style.left = left + "%"; fill.style.width = w + "%";
-				$(valId).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
-			};
-
-			// ---- Browser-as-controller toggle ----
-			// Off by default: this loop below runs unconditionally the moment the
-			// page is open (e.g. just to watch the camera), and used to publish
-			// deadman/base at 20Hz regardless -- which silently fights any other
-			// command source (input_agent.py's joystick reader, running at 50Hz)
-			// publishing to the exact same Zenoh topics. Two sources racing on
-			// "deadman" means it flips true/false every other message, so
-			// deadman_ok reads false most of the time and the robot never
-			// actually moves, even though someone IS correctly holding the
-			// physical deadman button on their own controller. Gating all of it
-			// behind an explicit opt-in makes "just watching the camera" safe.
-			let browserControlEnabled = localStorage.getItem("roby.browserControl") === "1";
-			const browserCtrlBox = $("browserCtrl");
-			browserCtrlBox.checked = browserControlEnabled;
-			browserCtrlBox.addEventListener("change", (e) => {
-				browserControlEnabled = e.target.checked;
-				localStorage.setItem("roby.browserControl", browserControlEnabled ? "1" : "0");
-				if (!browserControlEnabled) {
-					// Release explicitly so this browser's last command doesn't linger
-					// as the most-recent one at the robot for CMD_TIMEOUT_SEC.
-					ctrlSock.send({ type: "deadman", value: false });
-					ctrlSock.send({ type: "base", vx: 0, vy: 0, wz: 0 });
-				}
-			});
-
-			// ---- 20 Hz control loop ----
-			setInterval(() => {
-				const joy = updateJoystick();
-				const activeDeadman = (deadman || joy.deadman) && browserControlEnabled;
-				if (joy.speed != null) speed = joy.speed;
-
-				let vx = Math.max(-1, Math.min(1, (keys.fwd - keys.back) + joy.vx)) * speed;
-				let vy = Math.max(-1, Math.min(1, (keys.right - keys.left) + joy.vy)) * speed;   // Q/E strafe
-				let wz = Math.max(-1, Math.min(1, (keys.rotR - keys.rotL) + joy.wz)) * speed;    // A/D rotate
-				if (!activeDeadman) { vx = vy = wz = 0; }
-				setMeter("m-vx", "v-vx", vx);
-				setMeter("m-vy", "v-vy", vy);
-				setMeter("m-wz", "v-wz", wz);
-				if (browserControlEnabled) {
-					ctrlSock.send({ type: "deadman", value: activeDeadman });
-					ctrlSock.send({ type: "base", vx, vy, wz });
-				}
-				$("deadman").classList.toggle("armed", activeDeadman);
-				setTile("t-dead", activeDeadman ? "good" : "warning", activeDeadman ? "ARMÉ" : "RELÂCHÉ");
-			}, 50);
-		})();
-	</script>
+	<script type="module" src="/static/js/main.js"></script>
 </body>
 
 </html>

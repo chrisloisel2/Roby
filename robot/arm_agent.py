@@ -59,7 +59,19 @@ CONTROL_PERIOD = 0.02      # 50 Hz -- matches the hz already proven on this arm
 HEARTBEAT_PERIOD = 0.2     # 5 Hz heartbeat / state, incl. a present-position read
 
 # --- Arm connection -----------------------------------------------------------
-ARM_PORT = os.environ.get("ARM_PORT", "/dev/ttyACM0")
+# NOT /dev/ttyACM0: USB-serial enumeration order isn't stable across reboots on
+# this machine (confirmed 2026-07-08 -- after a reboot, ttyACM0/ttyACM1 swapped,
+# so the arm agent silently opened the WRONG serial device: an unrelated "HDSC
+# CDC Device", not the DaMiao-Tech CAN bridge. It looked "connected" -- the port
+# opens fine either way -- but every real command timed out waiting for a motor
+# ack that could never come, since nothing was listening on the other end).
+# Same class of bug as the camera's /dev/videoN probing (see camera_pub.py) --
+# fixed the same way Linux fixes it for USB-serial: address by the kernel's own
+# stable by-id symlink (vendor+product+serial), immune to enumeration order.
+ARM_PORT = os.environ.get(
+    "ARM_PORT",
+    "/dev/serial/by-id/usb-DaMiao-Tech_DM-USB2FDCAN_0B55817E687FF455E8EF2091E90F5BAD-if03",
+)
 ARM_ID = "follower"  # must match the calibration file already generated on this
                        # machine (~/.cache/huggingface/lerobot/calibration/robots/
                        # rebot_b601_follower/follower.json)
