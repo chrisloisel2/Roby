@@ -42,7 +42,12 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 	// disappears we fall back to "auto" rather than blocking (the app must
 	// keep working even with no pad selected).
 	joySelect.value = config.get("joystick.selected");
-	joySelect.addEventListener("change", () => config.set("joystick.selected", joySelect.value));
+	joySelect.addEventListener("change", () => {
+		// A focused <select> keeps capturing the keyboard (game keys are — by
+		// design — inert there); give focus back to the page once chosen.
+		joySelect.blur();
+		config.set("joystick.selected", joySelect.value);
+	});
 
 	function refreshJoyOptions() {
 		const pads = navigator.getGamepads ? navigator.getGamepads() : [];

@@ -64,21 +64,40 @@ export function initControl({ onFullscreen }) {
 	// ---- E-stop / reset ----
 	const triggerStop = () => { ctrlSock.send({ type: "stop" }); };
 	const sendReset = () => { ctrlSock.send({ type: "reset" }); };
-	$("estop").addEventListener("click", triggerStop);
-	$("reset").addEventListener("click", sendReset);
+	$("estop").addEventListener("click", (e) => { e.currentTarget.blur(); triggerStop(); });
+	$("reset").addEventListener("click", (e) => { e.currentTarget.blur(); sendReset(); });
+	// Sliders too: released focus = the keyboard always drives the robot.
+	spd.addEventListener("change", () => spd.blur());
+	$("grip").addEventListener("change", (e) => e.target.blur());
 
 	// ---- Keyboard ----
-	// Game keys are ignored while typing in a form control or while a modal is
-	// open: Space must adjust a settings checkbox, not arm the deadman.
-	const keyEventsBlocked = (ev) =>
-		ev.target.closest?.("input, select, textarea, button.assign")
-		|| document.querySelector(".modal-overlay:not([hidden])");
+	// Game keys are ignored ONLY while a modal is open or while typing in a
+	// text-entry control: there, Space/arrows must keep their native meaning.
+	const modalOpen = () => document.querySelector(".modal-overlay:not([hidden])");
+	const isTextEntry = (el) => el.closest?.("select, textarea, input[type=text], input[type=number]");
+
+	const GAME_KEYS = new Set(["Space", "KeyX", "KeyR", "KeyF"]);
+	const isGameKey = (code) => GAME_KEYS.has(code) || code in KEYMAP;
 
 	const highlight = (k, on) =>
 		document.querySelectorAll(`.dpad button[data-k="${k}"]`).forEach(b => b.classList.toggle("on", on));
 
 	document.addEventListener("keydown", (ev) => {
-		if (keyEventsBlocked(ev)) return;
+		if (modalOpen() || isTextEntry(ev.target)) return;
+		// A main-page control keeps focus after a click (the "Piloter depuis ce
+		// navigateur" toggle, a slider, the E-stop button…). It must NOT capture
+		// the keyboard: a focused checkbox toggles on Espace — which silently
+		// switched browser control back OFF right after the operator enabled it,
+		// so the robot "mysteriously" ignored every key — and a focused slider
+		// eats the arrows. For any driving key, take the focus back (blur also
+		// kills the pending Space-keyup activation of a checkbox/button) and
+		// handle the key normally; other keys (Tab…) keep native behaviour.
+		const focused = ev.target.closest?.("input, button");
+		if (focused) {
+			if (!isGameKey(ev.code)) return;
+			ev.preventDefault();
+			focused.blur();
+		}
 		if (ev.code === "Space") { ev.preventDefault(); setDeadman(true); return; }
 		if (ev.code === "KeyX") { triggerStop(); return; }
 		if (ev.code === "KeyR") { sendReset(); return; }
@@ -121,6 +140,9 @@ export function initControl({ onFullscreen }) {
 	const browserCtrlBox = $("browserCtrl");
 	browserCtrlBox.checked = config.get("control.browserControl");
 	browserCtrlBox.addEventListener("change", (e) => {
+		// Drop focus right away so the very next Espace arms the deadman
+		// instead of re-toggling this checkbox (see the keydown handler).
+		e.target.blur();
 		config.set("control.browserControl", e.target.checked);
 		if (!e.target.checked) {
 			// Release explicitly so this browser's last command doesn't linger
@@ -147,7 +169,17 @@ export function initControl({ onFullscreen }) {
 	let loopTimer = 0;
 	function start({ joystick, gello }) {
 		const tick = () => {
-			const joy = joystick.poll();
+			// The base command send below is safety-relevant (the robot-side
+			// watchdog stops on stale commands): a crash in an input source
+			// (gamepad quirk, serial hiccup) must degrade to "that source reads
+			// zero", never to "the whole loop is dead and nothing is sent".
+			let joy;
+			try {
+				joy = joystick.poll();
+			} catch (err) {
+				console.error("[control] joystick.poll() failed", err);
+				joy = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false };
+			}
 			const browserControlEnabled = config.get("control.browserControl");
 			const activeDeadman = (deadman || joy.deadman) && browserControlEnabled;
 			if (joy.speed != null && Math.abs(joy.speed - speed) > 0.005) {
@@ -173,17 +205,21 @@ export function initControl({ onFullscreen }) {
 			// gated only by the "Piloter depuis ce navigateur" toggle, same
 			// principle as operator/input_agent.py which publishes the arm
 			// independently of the base deadman.
-			if (gello.isConnected()) {
-				const action = gello.computeAction();
-				if (action) {
-					gello.showAction(action);
-					if (browserControlEnabled) {
-						const grip = action.gripper;
-						const joints = { ...action };
-						delete joints.gripper;
-						ctrlSock.send({ type: "arm", joints, gripper: grip });
+			try {
+				if (gello.isConnected()) {
+					const action = gello.computeAction();
+					if (action) {
+						gello.showAction(action);
+						if (browserControlEnabled) {
+							const grip = action.gripper;
+							const joints = { ...action };
+							delete joints.gripper;
+							ctrlSock.send({ type: "arm", joints, gripper: grip });
+						}
 					}
 				}
+			} catch (err) {
+				console.error("[control] gello tick failed", err);
 			}
 		};
 		const restart = () => {

@@ -45,7 +45,7 @@ DEBUG_TIMESTAMP = os.environ.get("DEBUG_TIMESTAMP", "0") == "1"
 def load_config() -> zenoh.Config:
     path = Path(__file__).resolve().parent.parent / "config" / "robot_zenoh.json5"
     config = zenoh.Config.from_file(str(path))
-    operator_ip = os.environ.get("OPERATOR_IP", "192.168.15.111")
+    operator_ip = os.environ.get("OPERATOR_IP", "169.254.140.115")
     if operator_ip:
         config.insert_json5("connect/endpoints", json.dumps([f"tcp/{operator_ip}:7447"]))
     return config
