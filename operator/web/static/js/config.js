@@ -18,7 +18,15 @@ const STORE_KEY = "roby.config.v2";
 export const DEFAULTS = Object.freeze({
 	version: 2,
 	control: {
-		rateHz: 20,          // must stay well under the robot watchdog's CMD_TIMEOUT_SEC
+		// Matches arm_agent.py's own 50Hz control loop and stays well under
+		// the robot watchdog's CMD_TIMEOUT_SEC (0.3s base / 0.3s arm). Used to
+		// default to 20Hz, which capped how often a GELLO-driven arm target
+		// could even be relayed -- now that GELLO's smoothing filter runs at
+		// the sensor's native ~60Hz (see static/js/gello.js) instead of at
+		// this rate, there's no reason left to hold the relay rate down; the
+		// base's own loop (100Hz, robot_agent.py) has plenty of headroom too.
+		rateHz: 50,
+
 		defaultSpeed: 0.6,
 		rememberSpeed: true,
 		speed: 0.6,          // last slider value (used when rememberSpeed)

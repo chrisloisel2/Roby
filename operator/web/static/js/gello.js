@@ -40,8 +40,9 @@ export function initGello() {
 	let gelloCalibration = null;
 	let gelloConnected = false;
 	let gelloActivePort = null;
-	const gelloRawAngles = {};  // joint_id (firmware) -> last raw reading (deg)
 	const gelloFiltered = {};   // joint name -> smoothed value (before direction/scale/offset)
+	const GELLO_JOINT_NAME_BY_ID = Object.fromEntries(
+		Object.entries(GELLO_JOINT_IDS).map(([name, jid]) => [jid, name]));
 
 	gelloHead.addEventListener("click", () => {
 		const open = gelloBody.classList.toggle("open");
@@ -99,23 +100,44 @@ export function initGello() {
 		});
 	}
 
-	// Reproduces GelloReader.get_action() (operator/gello_reader.py):
-	// clip to measured limits (±margin) -> exponential smoothing -> direction
-	// -> scale -> offset. Omits a key until a valid reading arrived for that
-	// joint (never a fabricated 0.0).
+	// Reproduces GelloReader.get_action() (operator/gello_reader.py): clip to
+	// measured limits (±margin) -> exponential smoothing -> direction -> scale
+	// -> offset.
+	//
+	// The smoothing step runs HERE, once per raw serial line (~60Hz, the
+	// GELLO firmware's own streaming rate) -- NOT inside computeAction() below.
+	// It used to: computeAction() was only called once per control tick
+	// (control.rateHz, 20Hz by default), so the exponential filter only ever
+	// advanced 20 times/s instead of 60, which -- for a first-order EMA --
+	// directly stretches its settling time by the same factor (roughly 300ms
+	// becomes ~1s to reach 95% of a step change). Coupling "how often do we
+	// smooth" to "how often do we publish over the network" made the arm feel
+	// laggy independently of any real network/CAN latency (measured ~1.2ms
+	// round-trip on this hardware -- not the bottleneck). Filtering at the
+	// sensor's native rate and simply publishing whatever the filter's latest
+	// output is, at whatever rate control.rateHz allows, decouples the two.
+	function updateFiltered(jid, raw) {
+		if (!gelloCalibration) return;
+		const name = GELLO_JOINT_NAME_BY_ID[jid];
+		const calib = name && gelloCalibration[name];
+		if (!calib) return;
+		const margin = config.get("gello.rangeMarginDeg");
+		const clipped = Math.max(calib.range_min - margin, Math.min(calib.range_max + margin, raw));
+		const prev = gelloFiltered[name];
+		const smoothing = config.get("gello.smoothing");
+		gelloFiltered[name] = (prev == null) ? clipped : prev + smoothing * (clipped - prev);
+	}
+
+	// Called once per control tick: just reads the already-filtered values
+	// (see updateFiltered above) and applies direction/scale/offset. Omits a
+	// key until a valid reading arrived for that joint (never a fabricated 0.0).
 	function computeAction() {
 		if (!gelloCalibration) return null;
-		const smoothing = config.get("gello.smoothing");
-		const margin = config.get("gello.rangeMarginDeg");
 		const action = {};
-		for (const [name, jid] of Object.entries(GELLO_JOINT_IDS)) {
-			let raw = gelloRawAngles[jid];
+		for (const name of Object.keys(GELLO_JOINT_IDS)) {
+			const filtered = gelloFiltered[name];
 			const calib = gelloCalibration[name];
-			if (raw == null || !calib) continue;
-			raw = Math.max(calib.range_min - margin, Math.min(calib.range_max + margin, raw));
-			const prev = gelloFiltered[name];
-			const filtered = (prev == null) ? raw : prev + smoothing * (raw - prev);
-			gelloFiltered[name] = filtered;
+			if (filtered == null || !calib) continue;
 			const direction = GELLO_JOINT_DIRECTIONS[name];
 			const scale = GELLO_JOINT_SCALES[name] ?? 1.0;
 			const offsetDeg = calib.homing_offset / 100.0;  // stored in centidegrees
@@ -142,7 +164,7 @@ export function initGello() {
 					let m;
 					while ((m = GELLO_LINE_RE.exec(line))) {
 						if (m[2] === "ERR") continue;
-						gelloRawAngles[parseInt(m[1], 10)] = parseFloat(m[2]);
+						updateFiltered(parseInt(m[1], 10), parseFloat(m[2]));
 					}
 				}
 			}

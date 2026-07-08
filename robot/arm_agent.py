@@ -187,7 +187,8 @@ def main() -> None:
 
             try:
                 while True:
-                    now = time.time()
+                    tick_start = time.time()
+                    now = tick_start
                     with state.lock:
                         cmd = state.arm_cmd
                         estop = state.estop
@@ -219,7 +220,21 @@ def main() -> None:
                             "ts": now,
                         }))
 
-                    time.sleep(CONTROL_PERIOD)
+                    # Elapsed-time-aware sleep: a flat time.sleep(CONTROL_PERIOD)
+                    # would make the loop run SLOWER than 50Hz by however long
+                    # send_action()/get_observation() actually took (silently --
+                    # nothing would ever indicate the loop had fallen behind).
+                    # Measured cost of send_action()'s CAN round-trip on this
+                    # hardware is ~1.2ms (negligible against the 20ms budget),
+                    # so this rarely matters in practice -- but the print below
+                    # makes a future regression (a flaky USB moment, a much
+                    # heavier CAN load) visible instead of just adding silent,
+                    # unmeasured latency to every GELLO->arm movement.
+                    elapsed = time.time() - tick_start
+                    if elapsed > CONTROL_PERIOD:
+                        print(f"[arm_agent] tick took {elapsed * 1000:.1f}ms "
+                              f"(budget {CONTROL_PERIOD * 1000:.0f}ms) -- loop running behind", flush=True)
+                    time.sleep(max(0.0, CONTROL_PERIOD - elapsed))
             except KeyboardInterrupt:
                 pass
     finally:

@@ -50,6 +50,7 @@ JOINT_IDS = {
     "wrist_roll": 6,
     "gripper": 7,
 }
+JOINT_NAME_BY_ID = {jid: name for name, jid in JOINT_IDS.items()}
 
 # Sign applied to each sensor's raw angle to match the follower's
 # convention. Determined empirically on this hardware (config_gello_as5600_
@@ -96,6 +97,19 @@ class GelloReader:
     exponential smoothing -> sign -> scale -> offset) so the numbers match
     what the follower already expects, without needing a live connection to
     the follower itself (the offset was fixed once at calibration time).
+
+    The clip+smoothing step runs in the background reader thread (_run),
+    once per raw serial line -- i.e. at the GELLO firmware's own streaming
+    rate (~60Hz, one line every ~16ms) -- NOT inside get_action(). It used
+    to run inside get_action() instead, so the exponential filter only
+    advanced as often as the caller polled it (input_agent.py: 50Hz: not
+    far off here, but the standalone `python gello_reader.py` test loop
+    below only polls at 20Hz, and the browser's equivalent, static/js/
+    gello.js, defaults to 20Hz too) -- for a first-order EMA, a slower
+    advance rate directly stretches wall-clock settling time by the same
+    factor (~300ms to ~95%-settle at 60Hz becomes ~1s at 20Hz). Filtering at
+    the sensor's native rate and letting callers just read the latest
+    already-filtered value, whenever they poll, decouples the two.
     """
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
@@ -134,32 +148,26 @@ class GelloReader:
                 for jid_s, val_s in matches:
                     if val_s == "ERR":
                         continue
-                    self._raw[int(jid_s)] = float(val_s)
+                    jid = int(jid_s)
+                    self._raw[jid] = value = float(val_s)
+                    name = JOINT_NAME_BY_ID.get(jid)
+                    calib = self._calibration.get(name) if name else None
+                    if calib is not None:
+                        lo, hi = calib["range_min"], calib["range_max"]
+                        value = max(lo - RANGE_SAFETY_MARGIN_DEG, min(hi + RANGE_SAFETY_MARGIN_DEG, value))
+                    prev = self._filtered.get(name)
+                    self._filtered[name] = value if prev is None else prev + LEADER_SMOOTH * (value - prev)
 
     def get_action(self) -> dict[str, float]:
         """Return {joint_name: calibrated_follower_degrees} for whichever
-        joints already have a valid reading. Right after startup this is
-        naturally a partial dict -- an omitted key means "no update yet",
-        never a fabricated 0.0."""
+        joints already have a valid (clipped + smoothed, see _run above)
+        reading. Right after startup this is naturally a partial dict -- an
+        omitted key means "no update yet", never a fabricated 0.0."""
         action: dict[str, float] = {}
-        for name, joint_id in JOINT_IDS.items():
-            with self._lock:
-                raw = self._raw.get(joint_id)
+        for name in JOINT_IDS:
             calib = self._calibration.get(name)
-
-            if raw is not None and calib is not None:
-                lo, hi = calib["range_min"], calib["range_max"]
-                raw = max(lo - RANGE_SAFETY_MARGIN_DEG, min(hi + RANGE_SAFETY_MARGIN_DEG, raw))
-
-            prev = self._filtered[name]
-            if raw is None:
-                filtered = prev
-            elif prev is None:
-                filtered = raw
-            else:
-                filtered = prev + LEADER_SMOOTH * (raw - prev)
-            self._filtered[name] = filtered
-
+            with self._lock:
+                filtered = self._filtered.get(name)
             if filtered is None or calib is None:
                 continue
 
