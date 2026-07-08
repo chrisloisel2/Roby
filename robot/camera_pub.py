@@ -18,13 +18,16 @@ size. This -- capture-then-downscale, no artificial frame-rate cap, higher
 JPEG_QUALITY on the smaller frame, raw binary transport all the way to the
 browser -- mirrors a known-good low-latency reference pipeline.
 """
-import json
 import os
+import sys
 import time
 from pathlib import Path
 
 import cv2
 import zenoh
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zenoh_config import load_robot_config
 
 KEY = "robot/camera/front/jpeg"
 WIDTH, HEIGHT = 1920, 1080
@@ -40,15 +43,6 @@ ROTATE = None
 # by comparing it against the viewer's clock -- catches latency hidden
 # inside the camera's own firmware/driver that per-stage timing can't see.
 DEBUG_TIMESTAMP = os.environ.get("DEBUG_TIMESTAMP", "0") == "1"
-
-
-def load_config() -> zenoh.Config:
-    path = Path(__file__).resolve().parent.parent / "config" / "robot_zenoh.json5"
-    config = zenoh.Config.from_file(str(path))
-    operator_ip = os.environ.get("OPERATOR_IP", "169.254.140.115")
-    if operator_ip:
-        config.insert_json5("connect/endpoints", json.dumps([f"tcp/{operator_ip}:7447"]))
-    return config
 
 
 def open_camera(camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
@@ -75,7 +69,7 @@ def open_camera(camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
 
 
 def main() -> None:
-    with zenoh.open(load_config()) as session:
+    with zenoh.open(load_robot_config("camera_pub")) as session:
         # DROP + express: under network congestion, prefer dropping a stale
         # frame over queueing it — queueing is exactly what turns a slow link
         # into ever-growing latency instead of just a lower delivered fps.

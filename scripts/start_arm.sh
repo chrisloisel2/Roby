@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Robot PC: start the arm agent (reBot B601 follower).
+# Robot PC: start ONLY the arm agent (reBot B601 follower), standalone.
 #
-# Deliberately NOT folded into start_robot.sh: the base (mecanum) control
-# path is already validated on real hardware; the arm path (this script) is
-# brand new. Keeping them separate means restarting/testing the base never
-# implicitly re-arms the arm, and vice versa. Fold this in once the arm path
-# has had a real bring-up.
+# Normal operation now goes through scripts/start_robot.sh, which starts the
+# base, camera, AND arm together (folded in 2026-07-08 after the arm path's
+# real bring-up). Keep using THIS script for isolated arm-only work --
+# testing/restarting the arm alone without touching the already-validated
+# base, e.g. while iterating on calibration or ARM_PORT.
 #
 # Runs robot/arm_agent.py with the `lerobot` conda env's python (NOT the
 # project's own .venv): RebotB601Follower is reused as-is from
@@ -18,6 +18,17 @@
 # CAN bus / arm.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# OPERATOR_IP is required (robot/zenoh_config.py enforces it too, but
+# failing here is friendlier -- before connect() below energizes the arm
+# motors). See that module's docstring: a stale hardcoded default IP used
+# to make the base's robot_agent.py silently connect nowhere; requiring the
+# IP explicitly everywhere on this PC closes that whole bug class for good.
+if [ -z "${OPERATOR_IP:-}" ]; then
+    echo "start_arm.sh: OPERATOR_IP est requis, ex:" >&2
+    echo "    OPERATOR_IP=192.168.15.111 scripts/start_arm.sh" >&2
+    exit 1
+fi
 
 PY="${ARM_PYTHON:-$HOME/miniconda3/envs/lerobot/bin/python3}"
 if [ ! -x "$PY" ]; then

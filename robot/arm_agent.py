@@ -45,10 +45,15 @@ so there is nothing analogous to the base's stop_robot() ramp-to-zero here.
 """
 import json
 import os
+import sys
 import threading
 import time
+from pathlib import Path
 
 import zenoh
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zenoh_config import load_robot_config
 
 from lerobot.robots.rebot_b601_follower import RebotB601Follower, RebotB601FollowerRobotConfig
 
@@ -59,18 +64,27 @@ CONTROL_PERIOD = 0.02      # 50 Hz -- matches the hz already proven on this arm
 HEARTBEAT_PERIOD = 0.2     # 5 Hz heartbeat / state, incl. a present-position read
 
 # --- Arm connection -----------------------------------------------------------
-# NOT /dev/ttyACM0: USB-serial enumeration order isn't stable across reboots on
-# this machine (confirmed 2026-07-08 -- after a reboot, ttyACM0/ttyACM1 swapped,
-# so the arm agent silently opened the WRONG serial device: an unrelated "HDSC
-# CDC Device", not the DaMiao-Tech CAN bridge. It looked "connected" -- the port
-# opens fine either way -- but every real command timed out waiting for a motor
-# ack that could never come, since nothing was listening on the other end).
-# Same class of bug as the camera's /dev/videoN probing (see camera_pub.py) --
-# fixed the same way Linux fixes it for USB-serial: address by the kernel's own
-# stable by-id symlink (vendor+product+serial), immune to enumeration order.
+# NOT a bare /dev/ttyACM0: USB-serial enumeration order isn't stable across
+# reboots on this machine, so a plain "ttyACM0" can silently point at a
+# different physical device after a reboot/replug -- same class of bug as the
+# camera's /dev/videoN probing (see camera_pub.py), fixed the same way Linux
+# fixes it for USB-serial: address by the kernel's own stable by-id symlink
+# (vendor+product+serial), immune to enumeration order.
+#
+# The board's USB descriptor reports vendor "HDSC" / model "CDC Device" --
+# NOT a "DaMiao-Tech" string, despite the CAN bridge being a Damiao part
+# internally. An earlier version of this file assumed the HDSC device was a
+# different, unrelated peripheral and hardcoded a "DaMiao-Tech_DM-USB2FDCAN"
+# by-id path instead -- that device was never actually observed on this
+# machine (confirmed 2026-07-08 via lsusb/udevadm monitor across several
+# physical replugs), so robot/cmd/arm silently went nowhere. Verified
+# correct the same day with a read-only motorbridge probe straight against
+# this exact by-id path -- Controller.from_dm_serial() + add_damiao_motor()
+# + request_feedback() (no enable(), no motion possible) got a real state
+# reply from all 7 joints.
 ARM_PORT = os.environ.get(
     "ARM_PORT",
-    "/dev/serial/by-id/usb-DaMiao-Tech_DM-USB2FDCAN_0B55817E687FF455E8EF2091E90F5BAD-if03",
+    "/dev/serial/by-id/usb-HDSC_CDC_Device_00000000050C-if00",
 )
 ARM_ID = "follower"  # must match the calibration file already generated on this
                        # machine (~/.cache/huggingface/lerobot/calibration/robots/
@@ -96,17 +110,6 @@ class State:
 
 
 state = State()
-
-
-def load_config() -> zenoh.Config:
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parent.parent / "config" / "robot_zenoh.json5"
-    config = zenoh.Config.from_file(str(path))
-    operator_ip = os.environ.get("OPERATOR_IP")
-    if operator_ip:
-        config.insert_json5("connect/endpoints", json.dumps([f"tcp/{operator_ip}:7447"]))
-    return config
 
 
 def _build_action(cmd: dict) -> dict[str, float]:
@@ -172,7 +175,7 @@ def main() -> None:
     print("arm_agent: follower connected and calibrated.")
 
     try:
-        with zenoh.open(load_config()) as session:
+        with zenoh.open(load_robot_config("arm_agent")) as session:
             session.declare_subscriber("robot/cmd/arm", on_arm)
             session.declare_subscriber("robot/cmd/stop", lambda s: on_stop(s, follower))
             session.declare_subscriber("robot/cmd/reset", lambda s: on_reset(s, follower))

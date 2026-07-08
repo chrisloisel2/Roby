@@ -55,6 +55,7 @@ import zenoh
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dmcan import dmcan_device_type
 from damiao import DM_Motor_Type, Control_Mode, DmActData, Motor_Control
+from zenoh_config import load_robot_config
 
 # --- Safety parameters -------------------------------------------------------
 CMD_TIMEOUT_SEC = 0.3      # stop if no fresh base command within this window
@@ -87,16 +88,6 @@ _ctrl: Motor_Control | None = None
 _motors: list | None = None
 _smoothed = [0.0, 0.0, 0.0, 0.0]  # per-wheel [FR, FL, RL, RR], post-INVERT
 _last_tick: float | None = None
-
-
-def load_config() -> zenoh.Config:
-    """Load the robot client config, honoring an OPERATOR_IP env override."""
-    path = Path(__file__).resolve().parent.parent / "config" / "robot_zenoh.json5"
-    config = zenoh.Config.from_file(str(path))
-    operator_ip = os.environ.get("OPERATOR_IP")
-    if operator_ip:
-        config.insert_json5("connect/endpoints", json.dumps([f"tcp/{operator_ip}:7447"]))
-    return config
 
 
 class State:
@@ -268,7 +259,7 @@ def main() -> None:
     print("robot_agent: motors ready.")
 
     try:
-        with zenoh.open(load_config()) as session:
+        with zenoh.open(load_robot_config("robot_agent")) as session:
             session.declare_subscriber("robot/cmd/base", on_base)
             session.declare_subscriber("robot/cmd/arm", on_arm)
             session.declare_subscriber("robot/cmd/gripper", on_gripper)

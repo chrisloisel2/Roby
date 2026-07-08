@@ -1,14 +1,20 @@
 {
-  // Client config for the ROBOT PC scripts (robot_agent.py, camera_pub.py).
-  // Point this at the OPERATOR PC that runs the zenohd router.
+  // Client config for the ROBOT PC scripts (robot_agent.py, camera_pub.py,
+  // arm_agent.py). The `connect.endpoints` value below is NEVER actually
+  // used: robot/zenoh_config.py's load_robot_config() always overwrites it
+  // from the required OPERATOR_IP environment variable before opening the
+  // session (see that module for why -- a stale hardcoded IP here used to
+  // cause robot_agent.py to silently connect nowhere after the operator
+  // Mac's DHCP lease changed). This file only still needs to parse as valid
+  // Zenoh config JSON5; the endpoint below is illustrative, not load-bearing.
   //
-  // Default below is Christopher's Mac on the local LAN (192.168.15.0/24) —
-  // lower latency than Tailscale, use whenever robot and operator are on the
-  // same network. If they aren't, use the Tailscale IP (100.x range) instead;
-  // either way, override at runtime without touching this file:
-  //     OPERATOR_IP=192.168.15.106 python robot_agent.py
+  //     OPERATOR_IP=192.168.15.111 python robot_agent.py
+  //
+  // Find the operator PC's current IP with `ipconfig getifaddr en0` on the
+  // Mac (local LAN, lower latency) or `tailscale ip -4` (Tailscale, 100.x
+  // range, when robot and operator aren't on the same network).
   mode: "client",
   connect: {
-    endpoints: ["tcp/192.168.15.106:7447"],
+    endpoints: ["tcp/192.168.15.111:7447"],
   },
 }
