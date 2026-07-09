@@ -98,8 +98,17 @@ en0` (local) ou `tailscale ip -4` (Tailscale) sur le PC opérateur donne l'IP
 GELLO_PORT=/dev/tty.usbserial-XXXX scripts/start_operator.sh   # zenohd + web_server + input_agent
 
 # PC robot
-OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base (Zenoh) + caméra (WebSocket direct, pas besoin d'OPERATOR_IP)
-OPERATOR_IP=192.168.15.106 scripts/start_arm.sh     # bras -- voir section dédiée, séparé exprès
+OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra + bras (défaut)
+OPERATOR_IP=192.168.15.106 scripts/start_arm.sh     # bras seul -- voir section dédiée, séparé exprès
+```
+
+`start_robot.sh` a deux flags d'opt-out, pour quand un adaptateur CAN est
+débranché/en panne et que tu veux quand même le reste de la stack au lieu
+d'être bloqué par les vérifications fail-fast :
+
+```bash
+NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra, pas de bras
+CAMERA_ONLY=1 scripts/start_robot.sh                              # caméra seule (pas d'OPERATOR_IP requis)
 ```
 
 La page opérateur se connecte à la caméra via `?robotIp=<ip-robot>` dans
