@@ -17,7 +17,9 @@ Sens navigateur → mât :
         serveur ne duplique aucune logique métier.
 
 Sens mât → navigateur (SSE, GET /events) :
-    - robot/mast/state  →  event SSE "state"  (JSON position_mm/fdc_min/fdc_max)
+    - robot/mast/state  →  event SSE "state"  (JSON position_mm/fdc_min/fdc_max ;
+        enrichi ici avec velocity_mm_s (signé, +=montée) et speed_mm_s (module),
+        vitesse lissée déduite des timestamps t et de position_mm)
     - robot/mast/event  →  event SSE "event"  (ACK/MSG/WARN/ERR — dont COURSE)
     - robot/mast/link   →  event SSE "link"   ("Connected"/"Disconnected")
 
@@ -44,6 +46,7 @@ import os
 import queue
 import sys
 import threading
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -63,6 +66,56 @@ DECALIBRATE_PREFIXES = ("MSG:BOOT", "ERR:HOMING", "ERR:ENC_OR_STALL")
 
 def _decode(sample) -> str:
     return sample.payload.to_bytes().decode("utf-8", errors="replace").strip()
+
+
+# --------------------------------------------------------------------------
+# Estimateur de vitesse : dérive la vitesse (mm/s) du flux d'état à partir
+# des couples (t, position_mm). La position étant quantifiée à 0,1 mm, une
+# différence entre deux échantillons voisins (~16 ms) est très bruitée
+# (±6 mm/s). On lisse donc sur une courte fenêtre glissante (~0,25 s) :
+# v = (pos_courant − pos_début_fenêtre) / Δt. Signe : > 0 = montée
+# (position croissante), < 0 = descente.
+# --------------------------------------------------------------------------
+class VelocityEstimator:
+    def __init__(self, window_s: float = 0.25, max_gap_s: float = 0.5):
+        self._buf = deque()          # (t, pos)
+        self._win = window_s
+        self._gap = max_gap_s
+        self._last = 0.0
+        self._lock = threading.Lock()
+
+    def update(self, t: float, pos: float) -> float:
+        with self._lock:
+            b = self._buf
+            # Saut temporel (redémarrage du flux, horloge qui recule) → reset.
+            if b and (t <= b[-1][0] or (t - b[-1][0]) > self._gap):
+                b.clear()
+                self._last = 0.0
+            b.append((t, pos))
+            while len(b) > 2 and (t - b[0][0]) > self._win:
+                b.popleft()
+            if len(b) >= 2:
+                dt = t - b[0][0]
+                if dt > 1e-3:
+                    self._last = (pos - b[0][1]) / dt
+            return self._last
+
+
+def _with_velocity(raw: str, est: "VelocityEstimator") -> str:
+    """Injecte velocity_mm_s (signé) et speed_mm_s (module) dans le JSON
+    d'état. En cas de JSON invalide ou de champ manquant, renvoie la charge
+    utile telle quelle (aucune régression pour les autres consommateurs)."""
+    try:
+        obj = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    pos, t = obj.get("position_mm"), obj.get("t")
+    if not isinstance(pos, (int, float)) or not isinstance(t, (int, float)):
+        return raw
+    v = est.update(float(t), float(pos))
+    obj["velocity_mm_s"] = round(v, 1)
+    obj["speed_mm_s"] = round(abs(v), 1)
+    return json.dumps(obj)
 
 
 # --------------------------------------------------------------------------
@@ -286,9 +339,10 @@ def main():
     args = parse_args()
     hub = Hub()
     cache = Cache()
+    vel_est = VelocityEstimator()
 
     def on_state(sample):
-        d = _decode(sample)
+        d = _with_velocity(_decode(sample), vel_est)
         cache.note_state(d)
         hub.broadcast("state", d)
 

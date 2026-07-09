@@ -55,9 +55,25 @@
   .home{background:#1c2b3a; border-color:#2f5478}
   .stop{grid-column:1 / -1; background:var(--stop); border-color:#c93b3f; color:#fff; font-size:20px; padding:22px; letter-spacing:.5px}
 
+  .jogbtns{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px}
+  button.jog{padding:20px; font-size:18px; touch-action:none; user-select:none; -webkit-user-select:none}
+  button.jog.up{background:#14301f; border-color:#2f7850}
+  button.jog.down{background:#14243a; border-color:#2f5478}
+  button.jog.active{outline:3px solid var(--accent); outline-offset:-1px}
+
   .fdc{display:flex; gap:10px; margin-top:12px}
   .fdc .pill{font-size:12px}
   .fdc .dot.hit{background:var(--err)}
+
+  .velrow{display:flex; align-items:center; gap:14px; margin-top:14px}
+  .velread{display:flex; align-items:baseline; gap:6px; white-space:nowrap}
+  .vellbl{color:var(--muted); font-size:13px; margin-right:2px}
+  .velbig{font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-.5px}
+  .velarrow{font-size:20px; margin-left:2px}
+  .velarrow.up{color:var(--ok)} .velarrow.down{color:var(--accent)} .velarrow.idle{color:var(--muted)}
+  .velpeak{color:var(--muted); font-size:12px; margin-left:2px}
+  #velSpark{flex:1; min-width:0; height:42px; background:var(--panel2);
+    border:1px solid var(--line); border-radius:8px}
 
   .logwrap{margin-top:2px}
   .logtitle{color:var(--muted); font-size:12px; margin:0 0 6px; display:flex; justify-content:space-between}
@@ -91,6 +107,15 @@
       <span class="pill"><span class="dot" id="fdcMin"></span>FDC bas</span>
       <span class="pill"><span class="dot" id="fdcMax"></span>FDC haut</span>
     </div>
+    <div class="velrow">
+      <div class="velread">
+        <span class="vellbl">Vitesse</span>
+        <span class="velbig" id="velVal">0.0</span><span class="unit">mm/s</span>
+        <span class="velarrow idle" id="velArrow">•</span>
+        <span class="velpeak" id="velPeak"></span>
+      </div>
+      <canvas id="velSpark"></canvas>
+    </div>
   </div>
 
   <div class="panel">
@@ -100,6 +125,19 @@
     </div>
     <input type="range" id="slider" min="0" max="100" step="0.5" value="0" disabled>
     <label class="opt"><input type="checkbox" id="liveFollow" checked>Suivi continu pendant le glissement (sinon : envoi au relâchement)</label>
+  </div>
+
+  <div class="panel">
+    <div class="setrow">
+      <span class="setlbl">Déplacement manuel — maintenir le bouton</span>
+      <span class="setval"><span id="jogSpeedVal">30</span> mm/s</span>
+    </div>
+    <input type="range" id="jogSpeed" min="2" max="50" step="1" value="30">
+    <div class="jogbtns">
+      <button class="jog up" id="btnUp">＋ Monter</button>
+      <button class="jog down" id="btnDown">－ Descendre</button>
+    </div>
+    <p class="hint">Maintiens pour déplacer, relâche pour arrêter. Arrêt automatique si le lien est coupé (watchdog 300&nbsp;ms). Fonctionne même avant le homing.</p>
   </div>
 
   <div class="btns">
@@ -118,6 +156,10 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const SEND_THROTTLE_MS = 140;
+const SPARK_WINDOW_S = 6;     // fenêtre affichée du mini-graphe de vitesse
+const VEL_WIN_S = 0.25;       // fenêtre de lissage (repli client)
+const VEL_GAP_S = 0.5;        // au-delà : saut temporel → reset
+const VEL_IDLE = 0.3;         // sous ce module (mm/s) : considéré à l'arrêt
 
 let maxMm = null;          // course calibrée (mm) ; null tant que non homé
 let calibrated = false;
@@ -133,10 +175,13 @@ function post(payload){
     .catch(e => logLine("ERR:WEB,"+e));
 }
 const sendPos = mm => post(JSON.stringify({action:"position", mm:+(+mm).toFixed(2)}));
-const doStop  = () => post(JSON.stringify({action:"stop"}));
+const sendVel = v  => post(JSON.stringify({action:"velocity", mm_s:+(+v).toFixed(1)}));
+function doStop(){ clearJog(false); post(JSON.stringify({action:"stop"})); }
 function doHome(){
   homing = true;
+  clearJog(false);                 // pas de jog résiduel pendant le homing
   setSliderEnabled(false);
+  setJogEnabled(false);
   $("btnHome").disabled = true;
   $("btnHomeStop").disabled = false;
   setBanner("busy", "Homing en cours…");
@@ -177,6 +222,44 @@ document.addEventListener("keydown", e => { if(e.key === "Escape"){ e.preventDef
 $("logClear").addEventListener("click", () => { $("log").innerHTML = ""; });
 function flashStop(){ const b=$("btnStop"); b.style.outline="3px solid #fff"; setTimeout(()=>b.style.outline="",150); }
 
+// ---- Déplacement manuel (jog) : maintien = VEL réémis, relâche = VEL:0 ----
+// On s'appuie sur le mode VEL du firmware (>0 monte, <0 descend) et son
+// watchdog homme-mort (300 ms) : on réémet la consigne à ~10 Hz tant que le
+// bouton est tenu ; dès qu'on relâche (ou que le lien tombe), le mât s'arrête.
+let jogDir = 0;                 // -1 descente, +1 montée, 0 arrêt
+let jogTimer = null;
+const JOG_REFRESH_MS = 100;     // < watchdog 300 ms (marge x3)
+const jogSpeed = () => parseFloat($("jogSpeed").value) || 10;
+function setJogActive(dir){
+  $("btnUp").classList.toggle("active", dir > 0);
+  $("btnDown").classList.toggle("active", dir < 0);
+}
+function setJogEnabled(on){ $("btnUp").disabled = !on; $("btnDown").disabled = !on; }
+function jogStart(dir){
+  if($("btnUp").disabled) return;              // désactivé pendant un homing
+  jogDir = dir;
+  setJogActive(dir);
+  sendVel(dir * jogSpeed());                   // envoi immédiat
+  if(jogTimer) clearInterval(jogTimer);
+  jogTimer = setInterval(() => { if(jogDir) sendVel(jogDir * jogSpeed()); }, JOG_REFRESH_MS);
+}
+function clearJog(sendZero){
+  if(jogTimer){ clearInterval(jogTimer); jogTimer = null; }
+  const was = jogDir; jogDir = 0;
+  setJogActive(0);
+  if(sendZero && was !== 0) sendVel(0);         // arrêt explicite (watchdog en filet)
+}
+const jogStop = () => clearJog(true);
+
+$("jogSpeed").addEventListener("input", () => { $("jogSpeedVal").textContent = $("jogSpeed").value; });
+$("btnUp").addEventListener("pointerdown",   e => { e.preventDefault(); jogStart(+1); });
+$("btnDown").addEventListener("pointerdown", e => { e.preventDefault(); jogStart(-1); });
+// Relâche n'importe où = arrêt ; idem si l'onglet perd le focus (sécurité).
+window.addEventListener("pointerup", jogStop);
+window.addEventListener("pointercancel", jogStop);
+window.addEventListener("blur", jogStop);
+document.addEventListener("visibilitychange", () => { if(document.hidden) jogStop(); });
+
 // ---- Calibration ----
 function calibrate(course){
   maxMm = course; calibrated = true; homing = false;
@@ -185,6 +268,7 @@ function calibrate(course){
   s.value = Math.min(Math.max(lastActual, 0), course);   // démarre à la position réelle
   updateSetLabel(s.value);
   setSliderEnabled(true);
+  setJogEnabled(true);
   $("maxVal").textContent = course.toFixed(1);
   $("scaleMax").textContent = course.toFixed(0);
   $("btnHome").disabled = false;
@@ -195,6 +279,7 @@ function calibrate(course){
 function decalibrate(reason){
   calibrated = false; maxMm = null; homing = false;
   setSliderEnabled(false);
+  setJogEnabled(true);           // le jog reste dispo hors homing (même non calibré)
   $("maxVal").textContent = "?"; $("scaleMax").textContent = "max";
   $("btnHome").disabled = false; $("btnHomeStop").disabled = true;
   setBanner("need", reason || "Homing requis — le maximum du mât n'est pas connu.");
@@ -210,6 +295,73 @@ function refreshBar(){
   }
 }
 function setDot(id, cls){ $(id).className = "dot" + (cls ? " "+cls : ""); }
+
+// ---- Vitesse : valeur (serveur) ou repli calculé côté client -------------
+let velBuf = [];          // {t,pos} pour le repli client (t = timestamp firmware)
+let velHist = [];         // {t,v} pour le sparkline (t = horloge navigateur, s)
+let velPeak = 0;
+
+function clientVel(t, pos){
+  if(velBuf.length){
+    const last = velBuf[velBuf.length-1].t;
+    if(t <= last || t - last > VEL_GAP_S) velBuf = [];   // saut/reset flux
+  }
+  velBuf.push({t, pos});
+  while(velBuf.length > 2 && t - velBuf[0].t > VEL_WIN_S) velBuf.shift();
+  if(velBuf.length >= 2){
+    const dt = t - velBuf[0].t;
+    if(dt > 1e-3) return (pos - velBuf[0].pos) / dt;
+  }
+  return 0;
+}
+
+function updateVel(v){
+  const spd = Math.abs(v);
+  $("velVal").textContent = spd.toFixed(1);
+  const a = $("velArrow");
+  if(spd < VEL_IDLE){ a.textContent = "•"; a.className = "velarrow idle"; }
+  else if(v > 0){ a.textContent = "▲"; a.className = "velarrow up"; }    // montée
+  else { a.textContent = "▼"; a.className = "velarrow down"; }           // descente
+  if(spd > velPeak) velPeak = spd;
+  $("velPeak").textContent = velPeak > VEL_IDLE ? "· pic " + velPeak.toFixed(1) : "";
+  const now = performance.now() / 1000;   // horloge monotone pour l'axe temps
+  velHist.push({t: now, v: spd});
+  while(velHist.length && now - velHist[0].t > SPARK_WINDOW_S) velHist.shift();
+  drawSpark();
+}
+
+function drawSpark(){
+  const c = $("velSpark"); if(!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if(!w || !h) return;
+  if(c.width !== Math.round(w*dpr) || c.height !== Math.round(h*dpr)){
+    c.width = Math.round(w*dpr); c.height = Math.round(h*dpr);
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if(velHist.length < 2) return;
+  const t1 = performance.now() / 1000, t0 = t1 - SPARK_WINDOW_S;
+  let vmax = 1;
+  for(const p of velHist) if(p.v > vmax) vmax = p.v;
+  vmax *= 1.15;
+  const X = t => ((t - t0) / SPARK_WINDOW_S) * w;
+  const Y = v => h - (v / vmax) * (h - 4) - 2;
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  ctx.beginPath();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = css("--accent") || "#4aa3ff";
+  ctx.lineJoin = "round";
+  let started = false;
+  for(const p of velHist){
+    const x = X(p.t), y = Y(p.v);
+    if(!started){ ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+window.addEventListener("resize", drawSpark);
+
 function onState(data){
   let s; try { s = JSON.parse(data); } catch { return; }
   if(typeof s.position_mm === "number"){
@@ -217,6 +369,12 @@ function onState(data){
     $("posVal").textContent = s.position_mm.toFixed(1);
     refreshBar();
   }
+  // Vitesse : privilégie la valeur serveur (velocity_mm_s), sinon repli client.
+  let v = null;
+  if(typeof s.velocity_mm_s === "number") v = s.velocity_mm_s;
+  else if(typeof s.position_mm === "number")
+    v = clientVel(typeof s.t === "number" ? s.t : performance.now()/1000, s.position_mm);
+  if(v !== null) updateVel(v);
   $("fdcMin").className = "dot" + (s.fdc_min ? " hit" : " ok");
   $("fdcMax").className = "dot" + (s.fdc_max ? " hit" : " ok");
 }

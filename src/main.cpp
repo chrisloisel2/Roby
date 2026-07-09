@@ -38,29 +38,71 @@
 
 
 
-// ── Paramètres machine ───────────────────────────────────────────────
-const long  STEPS_PER_REV     = 3200;                       // driver en 1/16
-const float MM_PER_REV        = 60.0;                       // pignon 60 mm/tour
-const float STEPS_PER_MM      = STEPS_PER_REV / MM_PER_REV; // 53.33
-const long  ENC_COUNTS_PER_REV = 2000;                      // 1000 PPR décodés x2
-const float ENC_COUNTS_PER_MM = ENC_COUNTS_PER_REV / MM_PER_REV; // 33.33
+// ── Paramètres machine — CHAÎNE CINÉMATIQUE EXPLICITE ────────────────
+//  Levage : moteur → réducteur à engrenages Ze/Zs → vis sans fin → chariot.
+//  Tout est dérivé de 4 grandeurs physiques : change UNE ligne matérielle,
+//  et STEPS_PER_MM, les gardes-fous et les vitesses (en mm/s) suivent.
+//
+//  Driver CL57T : micro-pas réglé par SW1-4. 800 pulse/rev = 1/4 de pas
+//  → SW1-4 = OFF / ON / ON / ON  (cf. table du manuel V3.0).
+const int   MOTOR_FULL_STEPS_REV = 200;   // moteur 1,8° → 200 pas entiers/tour
+const int   DRIVER_MICROSTEP     = 1;     // CL57T 1/4 (800 pulse/rev). Avant : 16 (3200).
+const int   GEAR_TEETH_IN        = 30;    // Ze — pignon côté MOTEUR (entrée)
+const int   GEAR_TEETH_OUT       = 40;    // Zs — roue côté VIS (sortie)
+const float SCREW_LEAD_MM        = 5.0;   // course de la vis par tour de VIS (pas × nb filets)
 
-// Périodes de pas en µs (période COMPLÈTE par pas ; l'ancien code
-// utilisait des demi-périodes : 500 µs demi-période ≡ 1000 µs ici).
-const unsigned int PERIOD_MOVE_SLOW      = 2000; // départ/arrivée très doux
-const unsigned int PERIOD_MOVE_FAST_UP   = 300; // croisière montée
-const unsigned int PERIOD_MOVE_FAST_DOWN = 300; // croisière descente.
-// Volontairement identiques par défaut (l'ancien commentaire « vitesses
-// différenciées » ne correspondait à rien). La descente étant aidée par
-// la gravité et la montée non, on peut ralentir la montée (augmenter
-// PERIOD_MOVE_FAST_UP) si des pertes de pas apparaissent — mais la
-// supervision codeur les détecte désormais, donc on garde la symétrie
-// tant que le terrain ne prouve pas le contraire.
-const unsigned int PERIOD_HOMING_SEEK    = 300;  // recherche FDC (ex 150 µs demi)
-const unsigned int PERIOD_HOMING_BACKOFF = 400;  // recul 3 mm (ex 200 µs demi)
-const unsigned int PERIOD_HOMING_FINAL   = 200;  // recul final (ex 100 µs demi)
-const unsigned int PERIOD_JOG            = 400;  // jog (ex 200 µs demi)
-const unsigned int STEP_PULSE_US         = 10;   // largeur impulsion STEP
+const long  STEPS_PER_REV = (long)MOTOR_FULL_STEPS_REV * DRIVER_MICROSTEP;      // 800 pulse/rev moteur
+// mm de chariot par tour MOTEUR = pas_vis × (Ze/Zs).  Réduction S/E = 30/40 = 3/4.
+const float MM_PER_REV    = SCREW_LEAD_MM * (float)GEAR_TEETH_IN / (float)GEAR_TEETH_OUT; // 5 × 3/4 = 3,75
+const float STEPS_PER_MM  = STEPS_PER_REV / MM_PER_REV;                          // 800 / 3,75 = 213,33
+
+// Codeur : optique 1000 PPR SUR L'ARBRE MOTEUR (E1000 intégré, décodé x2).
+// Comme il est en amont de la réduction, pas ET counts se rapportent au
+// même MM_PER_REV moteur → les deux échelles suivent automatiquement le
+// changement de chaîne, aucune recalibration séparée du codeur nécessaire.
+const long  ENC_COUNTS_PER_REV = 2000;                            // 1000 PPR × 2
+const float ENC_COUNTS_PER_MM  = ENC_COUNTS_PER_REV / MM_PER_REV; // 2000 / 3,75 = 533,33 counts/mm
+// Résolution résultante : ~3,1 µm/pas et ~1,25 µm/count (≫ tolérance 0,3 mm).
+
+// ── Vitesses exprimées en mm/s (indépendantes de la résolution) ──────
+//  Les périodes de pas (µs) sont CALCULÉES depuis la vitesse et
+//  STEPS_PER_MM. Avantage : la nouvelle chaîne (320 pas/mm au lieu de
+//  53) ne « ralentit » plus le chariot — on raisonne en mm/s, pas en µs.
+//
+//  Plafond matériel : l'ATmega328 génère les pas en soft (échéancier
+//  micros() + impulsion ~10 µs). En pratique la fréquence de pas fiable
+//  plafonne autour de 6–8 kHz. MIN_STEP_PERIOD_US borne donc la période
+//  la plus courte ; à 320 pas/mm, 130 µs ⇒ ~24 mm/s de vitesse max.
+//  → Si tu remontes le micro-pas ou baisses le pas de vis, augmente
+//    MIN_STEP_PERIOD_US si le moteur « décroche » à haute vitesse.
+const unsigned int MIN_STEP_PERIOD_US = 130;   // plancher période (sécurité MCU)
+
+static inline unsigned int periodUs(float mm_s) {
+  float p = 1000000.0f / (mm_s * STEPS_PER_MM);
+  if (p < (float)MIN_STEP_PERIOD_US) p = (float)MIN_STEP_PERIOD_US; // borne haute vitesse
+  if (p > 60000.0f)                  p = 60000.0f;                  // borne basse vitesse
+  return (unsigned int)(p + 0.5f);
+}
+
+// Consignes de vitesse (mm/s) — les seules valeurs à régler au besoin.
+const float V_MOVE_FAST_MM_S    = 50.0f; // croisière POS: (montée = descente)
+const float V_MOVE_SLOW_MM_S    =  5.0f; // rampes départ/arrivée + rattrapage
+const float V_HOMING_SEEK_MM_S  = 50.0f; // recherche des fins de course
+const float V_HOMING_BACKOFF_MM_S = 8.0f;// recul 3 mm après contact FDC
+const float V_HOMING_FINAL_MM_S =  4.0f; // recul final lent (zéro précis)
+const float V_JOG_MM_S          = 18.0f; // jog manuel
+
+const unsigned int PERIOD_MOVE_SLOW      = periodUs(V_MOVE_SLOW_MM_S);
+const unsigned int PERIOD_MOVE_FAST_UP   = periodUs(V_MOVE_FAST_MM_S); // montée
+const unsigned int PERIOD_MOVE_FAST_DOWN = periodUs(V_MOVE_FAST_MM_S); // descente
+// Symétriques par défaut ; la descente est aidée par la gravité, on peut
+// ralentir la montée (baisser V_MOVE_FAST côté UP) si des pertes de pas
+// apparaissent — la supervision codeur les détecte de toute façon.
+const unsigned int PERIOD_HOMING_SEEK    = 2 * periodUs(V_HOMING_SEEK_MM_S);
+const unsigned int PERIOD_HOMING_BACKOFF = periodUs(V_HOMING_BACKOFF_MM_S);
+const unsigned int PERIOD_HOMING_FINAL   = periodUs(V_HOMING_FINAL_MM_S);
+const unsigned int PERIOD_JOG            = periodUs(V_JOG_MM_S);
+const unsigned int STEP_PULSE_US         = 10;   // largeur impulsion STEP (CL57T min 2,5 µs)
 const unsigned int DIR_SETUP_US          = 5;    // setup DIR avant STEP
 
 // ── Mode vitesse VEL:<mm/s> (téléop joystick) ────────────────────────
@@ -69,22 +111,25 @@ const unsigned int DIR_SETUP_US          = 5;    // setup DIR avant STEP
 // 1e6 / (|v| * STEPS_PER_MM). Un WATCHDOG homme-mort arrête le chariot
 // (+ frein) si aucun VEL n'est reçu pendant VEL_TIMEOUT_MS : le PC doit
 // donc RÉÉMETTRE la consigne périodiquement (≥ ~10 Hz).
-const float        VEL_MAX_MM_S   = 100.0; // vitesse max autorisée (clamp)
+const float        VEL_MAX_MM_S   = 50.0;  // vitesse max autorisée (clamp) — plafond MCU
 const float        VEL_MIN_MM_S   = 1.0;   // sous ce seuil -> arrêt
-const unsigned int VEL_PERIOD_MIN = 187;   // ≈ 1e6/(100*53.33) : plancher période
-const unsigned int VEL_PERIOD_MAX = 18750; // ≈ 1e6/(1*53.33)   : plafond période
+// Bornes de période recalculées pour la nouvelle résolution (213,33 pas/mm)
+// via le même helper que les autres vitesses : plus de constante « en dur ».
+const unsigned int VEL_PERIOD_MIN = periodUs(VEL_MAX_MM_S); // ~130 µs (= plancher MCU)
+const unsigned int VEL_PERIOD_MAX = periodUs(VEL_MIN_MM_S); // ~3125 µs (1 mm/s)
 const unsigned int VEL_TIMEOUT_MS = 300;   // watchdog homme-mort (sans VEL -> stop+frein)
 
 // ── Supervision boucle fermée ────────────────────────────────────────
-#define ENCODER_SUPERVISION 1        // 0 = boucle ouverte pure (banc de test)
+#define ENCODER_SUPERVISION 0        // 0 = boucle ouverte pure (banc de test)
 const float STALL_TOL_MM        = 5.0;  // écart pas/codeur → décrochage
 const float STALL_MIN_TRAVEL_MM = 3.0;  // grâce au démarrage (relais frein…)
 const float POS_TOL_MM          = 0.3;  // tolérance d'arrivée POS:
 const uint8_t CORRECT_MAX       = 3;    // essais de rattrapage fin max
 const unsigned int SUPERVISION_PERIOD_MS = 50;
 // Vérification codeur pendant le homing (phase montée) :
-const long  ENC_CHECK_STEPS     = 800;  // après 15 mm de montée...
-const long  ENC_DEAD_COUNTS     = 50;   // ...< 50 counts (~500 attendus) = absent
+const float ENC_CHECK_MM        = 15.0; // distance de montée avant de juger le codeur
+const long  ENC_CHECK_STEPS     = (long)(ENC_CHECK_MM * STEPS_PER_MM); // 15 mm → 3200 pas
+const long  ENC_DEAD_COUNTS     = 50;   // < 50 counts sur 15 mm (~8000 attendus) = absent
 
 // ── Divers ───────────────────────────────────────────────────────────
 const unsigned int  DELAI_RELAIS_MS      = 10;    // stabilisation relais frein
@@ -173,7 +218,7 @@ bool    rxDiscard = false;
 // ── Fins de course : anti-rebond asymétrique non bloquant ───────────
 // Déclenchement : 2 ms de LOW stable (filtre les parasites µs induits
 // par le câble moteur, comme le faisait la relecture de la v1, sans
-// bloquer ; surcourse max ≈ 0,13 mm à la vitesse de homing).
+// bloquer ; surcourse max ≈ 0,04 mm à la vitesse de homing 18 mm/s).
 // Relâchement : 20 ms de HIGH stable (rebonds mécaniques).
 struct Endstop {
   uint8_t pin;
