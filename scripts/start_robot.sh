@@ -135,8 +135,16 @@ echo "start_robot.sh: RUN_BASE=$RUN_BASE RUN_ARM=$RUN_ARM -- logs dans logs/*.lo
 PIDS=()
 cleanup() {
     local pid
+    # -INT, not a plain kill (SIGTERM): robot_agent.py/arm_agent.py only
+    # disable torque and disconnect cleanly from their KeyboardInterrupt
+    # handler, which Python raises for SIGINT, never for SIGTERM. A plain
+    # `kill` here was silently skipping that entirely -- the arm stayed
+    # torqued/rigid after Ctrl-C because the finally: block in
+    # start_teleoperationV2.py's run_teleoperation() (robot.disconnect(),
+    # which disables torque per RebotB601Follower's
+    # disable_torque_on_disconnect=True) never got to run.
     for pid in "${PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
+        kill -INT "$pid" 2>/dev/null || true
     done
 }
 trap cleanup EXIT
