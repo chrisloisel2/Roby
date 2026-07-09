@@ -15,7 +15,7 @@ const KEYMAP = {
 	ArrowUp: "fwd", ArrowDown: "back", ArrowLeft: "rotL", ArrowRight: "rotR",
 };
 
-export function initControl({ onFullscreen }) {
+export function initControl({ onFullscreen, armLink }) {
 	const $ = (id) => document.getElementById(id);
 	const ctrlSock = createSocket("/ws/control");
 
@@ -214,7 +214,9 @@ export function initControl({ onFullscreen }) {
 							const grip = action.gripper;
 							const joints = { ...action };
 							delete joints.gripper;
-							ctrlSock.send({ type: "arm", joints, gripper: grip });
+							// Direct WebSocket to arm_agent.py (armLink.js), NOT
+							// ctrlSock/Zenoh -- see armLink.js for why.
+							armLink.sendJoints(joints, grip);
 						}
 					}
 				}

@@ -2,6 +2,11 @@
 # Operator PC: start the Zenoh router, web server, and input agent.
 # Run from the repo root. Ctrl-C stops everything.
 #
+# Set ROBOT_IP (the robot PC's address, e.g. 192.168.15.107) if GELLO_PORT
+# is also set: input_agent.py needs it to reach robot/arm_agent.py's own
+# WebSocket directly (not Zenoh-routed, see input_agent.py's ArmLink). Not
+# required for joystick-only base control with no GELLO plugged in.
+#
 # Idempotent: kills any already-running instance of each component before
 # starting fresh. This matters beyond tidiness -- a leftover zenohd fails
 # the new one with "Address already in use", and a leftover input_agent.py

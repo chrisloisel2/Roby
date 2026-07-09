@@ -13,6 +13,13 @@ robot/camera_pub.py's own WebSocket server (ws://<robot-ip>:8765, see
 static/js/camera.js) for lower latency than an extra JPEG-over-Zenoh hop
 would add. Losing this server does not lose the camera feed.
 
+Arm joint-position commands are ALSO not part of this bridge anymore: the
+browser sends those straight to robot/arm_agent.py's own WebSocket
+(ws://<robot-ip>:8767, see static/js/armLink.js) -- same reasoning as
+video. robot/cmd/stop and robot/cmd/reset (E-stop / re-arm) still go
+through this server's /ws/control, since they're shared with the base's
+own E-stop.
+
 Endpoints
 ---------
 GET  /                          the operator UI (operator/web/index.html)
@@ -21,7 +28,7 @@ GET  /gello_calibration.json   GELLO calibration, fetched once by the browser's
                                 own Web Serial reader (see static/js/gello.js) so
                                 the measured values aren't duplicated in the page.
 WS   /ws/status                server -> browser : robot heartbeat, reported state, arm state
-WS   /ws/control               browser -> server : {type: base|deadman|stop|reset|gripper|arm}
+WS   /ws/control               browser -> server : {type: base|deadman|stop|reset|gripper}
 
 Note: run ONE operator input source at a time (this web UI OR input_agent.py) —
 both publish to the same command topics. The browser can read the joystick
@@ -56,7 +63,7 @@ _robot_state = {}
 _arm_state = {}
 
 # --- Zenoh handles, populated on startup -------------------------------------
-Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None, "arm": None}
+Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None}
 
 
 def on_heartbeat(_sample):
@@ -92,7 +99,6 @@ async def lifespan(_app: FastAPI):
     Z["reset"] = session.declare_publisher("robot/cmd/reset")
     Z["deadman"] = session.declare_publisher("operator/deadman")
     Z["gripper"] = session.declare_publisher("robot/cmd/gripper")
-    Z["arm"] = session.declare_publisher("robot/cmd/arm")
     print("web_server ready on http://0.0.0.0:8080")
     try:
         yield
@@ -161,17 +167,9 @@ def _handle_control(msg: dict) -> None:
         Z["reset"].put("1")
     elif kind == "gripper":
         Z["gripper"].put(json.dumps({"gripper": float(msg.get("value", 0.0)), "ts": time.time()}))
-    elif kind == "arm":
-        # joints/gripper already leader-calibrated to the follower's frame by
-        # the browser (see index.html's GELLO/Web Serial section, itself a
-        # port of operator/gello_reader.py's math) -- forwarded close to
-        # as-is, same contract as gello_reader.py's read_gello() output.
-        Z["arm"].put(json.dumps({
-            "joints": msg.get("joints", {}),
-            "gripper": msg.get("gripper"),
-            "mode": "joint_position",
-            "ts": time.time(),
-        }))
+    # No "arm" case: joint-position commands go straight to arm_agent.py's
+    # own WebSocket now (armLink.js), not through this relay -- see this
+    # file's module docstring.
 
 
 @app.websocket("/ws/control")

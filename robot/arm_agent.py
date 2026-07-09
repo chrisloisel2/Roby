@@ -11,25 +11,50 @@ on this machine) pulls in the full lerobot package and its dependency chain
 control loop. This file MUST run with the `lerobot` conda env's python (see
 scripts/start_arm.sh), not the project's own .venv.
 
+Robot construction now goes through `make_robot_from_config()` (same
+pattern as `~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py`,
+this project's own known-good GELLO teleoperation script) instead of
+instantiating RebotB601Follower directly -- functionally identical
+(make_robot_from_config just dispatches on config.type to the same class),
+done for consistency with that reference script.
+
 Command contract
 ----------------
-robot/cmd/arm     JSON {"joints": {name: deg, ...}, "gripper": float, "mode": str}.
+WebSocket ws://<robot-ip>:ARM_WS_PORT   JSON text messages:
+                  {"joints": {name: deg, ...}, "gripper": float, "mode": str}.
+                  Sent DIRECTLY by the browser (operator/web/static/js/armLink.js),
+                  bypassing Zenoh + web_server.py's /ws/control relay --
+                  same "direct WebSocket, one fewer hop" pattern as
+                  camera_pub.py's video, but its OWN connection/port, not
+                  shared with the camera: this process needs the `lerobot`
+                  conda env, whose own opencv-python has NO GStreamer
+                  support (confirmed empirically 2026-07-09 -- same failure
+                  mode already documented in requirements.txt/README for a
+                  generic PyPI opencv-python wheel), so it can't share a
+                  process with camera_pub.py (which needs system cv2 with
+                  GStreamer) without breaking one of the two.
+
                   Joints are ALREADY leader-calibrated into the follower's
-                  frame by operator/gello_reader.py -- this process applies
-                  them close to directly (soft joint-limit clip and a
-                  max_relative_target safety cap happen inside
-                  RebotB601Follower.send_action(), nothing else). Ignored
-                  unless "mode" == "joint_position".
-robot/cmd/stop    Any payload -> latching emergency stop. Shared topic with
-                  robot_agent.py: one E-stop button/command kills both the
-                  base and the arm.
-robot/cmd/reset   Clears the E-stop latch and re-enables the arm motors.
-                  Shared topic with robot_agent.py, same "reset re-arms,
-                  doesn't itself cause motion" semantics.
+                  frame by the browser's own GELLO/Web Serial reader (a
+                  port of operator/gello_reader.py's math -- see
+                  index.html) -- this process applies them close to
+                  directly (soft joint-limit clip and a max_relative_target
+                  safety cap happen inside RebotB601Follower.send_action(),
+                  nothing else). Ignored unless "mode" == "joint_position".
+                  This is the exact same contract robot/cmd/arm carried
+                  before -- only the transport changed, Zenoh -> WebSocket.
+robot/cmd/stop    (Zenoh, UNCHANGED) Any payload -> latching emergency stop.
+                  Shared topic with robot_agent.py: one E-stop
+                  button/command kills both the base and the arm. Left on
+                  Zenoh deliberately -- moving it to this WebSocket would
+                  decouple that shared E-stop.
+robot/cmd/reset   (Zenoh, UNCHANGED) Clears the E-stop latch and re-enables
+                  the arm motors. Shared topic with robot_agent.py, same
+                  "reset re-arms, doesn't itself cause motion" semantics.
 
 Publishes
 ---------
-robot/arm/state   JSON status snapshot, ~5 Hz:
+robot/arm/state   (Zenoh, UNCHANGED) JSON status snapshot, ~5 Hz:
                   {connected, moving, fresh_cmd, estop, joints, ts}.
 
 Safety
@@ -37,12 +62,22 @@ Safety
 Independent of the base's deadman by design: teleoperating a 7-DOF leader
 arm needs both hands, so requiring the base's joystick button held down at
 the same time isn't workable (see operator/input_agent.py). Motion instead
-gates on robot/cmd/arm freshness (ARM_CMD_TIMEOUT_SEC) -- this process has
-its own watchdog, entirely independent of robot_agent.py's. A stale/missing
-command means "stop sending new targets", not "actively zero" -- the Damiao
-MIT/POS_VEL modes already hold their last commanded position on their own,
-so there is nothing analogous to the base's stop_robot() ramp-to-zero here.
+gates on the WebSocket command's freshness (ARM_CMD_TIMEOUT_SEC) -- this
+process has its own watchdog, entirely independent of robot_agent.py's. A
+stale/missing command means "stop sending new targets", not "actively
+zero" -- the Damiao MIT/POS_VEL modes already hold their last commanded
+position on their own, so there is nothing analogous to the base's
+stop_robot() ramp-to-zero here.
+
+Threading model: the 50Hz send_action()/get_observation() control loop runs
+in a background thread (same split as robot/uvc_camera_server.py's
+CameraCapture) so the ~1ms-scale CAN I/O it does never blocks the asyncio
+WebSocket server (running on the main thread) from receiving the next
+joint command. The Zenoh subscribers (stop/reset) run on Zenoh's own
+internal callback thread, same as before. All three touch the shared
+`state` object only under `state.lock`.
 """
+import asyncio
 import json
 import os
 import sys
@@ -50,18 +85,25 @@ import threading
 import time
 from pathlib import Path
 
+import websockets
 import zenoh
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zenoh_config import load_robot_config
 
+from lerobot.robots import make_robot_from_config
 from lerobot.robots.rebot_b601_follower import RebotB601Follower, RebotB601FollowerRobotConfig
 
 # --- Safety parameters -------------------------------------------------------
-ARM_CMD_TIMEOUT_SEC = 0.3  # stop sending new targets if no fresh robot/cmd/arm
+ARM_CMD_TIMEOUT_SEC = 0.3  # stop sending new targets if no fresh WS command
 CONTROL_PERIOD = 0.02      # 50 Hz -- matches the hz already proven on this arm
                             # (see ~/03_JelloSoft/rebot_lerobot/scripts/gello_follow.py)
 HEARTBEAT_PERIOD = 0.2     # 5 Hz heartbeat / state, incl. a present-position read
+
+ARM_WS_HOST = "0.0.0.0"
+ARM_WS_PORT = 8767
+
+running = True  # set False on shutdown to stop the control-loop thread
 
 # --- Arm connection -----------------------------------------------------------
 # NOT a bare /dev/ttyACM0: USB-serial enumeration order isn't stable across
@@ -91,14 +133,53 @@ ARM_ID = "follower"  # must match the calibration file already generated on this
                        # rebot_b601_follower/follower.json)
 
 # Extra software safety net for this arm's first time being driven through
-# THIS code path (on top of the smoothing already applied leader-side in
-# gello_reader.py): caps how far a single send_action() call may move any
-# joint from its last observed position. Catches a bad/glitched leader
+# THIS code path (on top of the smoothing already applied leader-side in the
+# browser's GELLO reader): caps how far a single send_action() call may move
+# any joint from its last observed position. Catches a bad/glitched leader
 # reading (e.g. a large jump right after connecting, before the leader's own
 # filter has settled) rather than translating it into a fast physical move.
-# Not meant to be the primary safety mechanism -- GELLO's own leader_smooth
-# is -- just a ceiling.
+# Not meant to be the primary safety mechanism -- GELLO's own leader-side
+# smoothing is -- just a ceiling.
 ARM_MAX_RELATIVE_TARGET_DEG = 3.0
+
+# --- Optional per-run joint_limits override -----------------------------------
+# RebotB601FollowerRobotConfig.joint_limits (vendored, robot PC) was never
+# actually measured -- calibrate() just copies the hardcoded config default
+# straight into the calibration file, no range-of-motion sweep at all (see
+# that file's configure()/calibrate() for the full story, confirmed
+# 2026-07-08: at least shoulder_lift and gripper were clipped hard enough to
+# be unusable in real teleop). operator/calibrate_arm_limits.py measures the
+# real range by sweeping the GELLO leader by hand and saves it as JSON.
+# Point ARM_JOINT_LIMITS_FILE at that file to use it for THIS run only,
+# without ever touching the vendored file -- handy for trying out a fresh
+# measurement before committing to it permanently.
+_EXPECTED_ARM_JOINTS = {
+    "shoulder_pan", "shoulder_lift", "elbow_flex",
+    "wrist_flex", "wrist_yaw", "wrist_roll", "gripper",
+}
+
+
+def _load_joint_limits_override() -> dict[str, tuple[float, float]] | None:
+    path = os.environ.get("ARM_JOINT_LIMITS_FILE")
+    if not path:
+        return None
+    with open(path) as f:
+        data = json.load(f)
+    # Accept either calibrate_arm_limits.py's full record (which nests the
+    # limits under "proposed_joint_limits") or a bare {name: [min, max]} file.
+    limits = data.get("proposed_joint_limits", data)
+    missing = _EXPECTED_ARM_JOINTS - set(limits)
+    if missing:
+        sys.exit(f"ARM_JOINT_LIMITS_FILE={path!r} is missing joints: {sorted(missing)}")
+    result: dict[str, tuple[float, float]] = {}
+    for name, bounds in limits.items():
+        if name not in _EXPECTED_ARM_JOINTS:
+            continue
+        lo, hi = float(bounds[0]), float(bounds[1])
+        if lo >= hi:
+            sys.exit(f"ARM_JOINT_LIMITS_FILE={path!r}: {name} has min >= max ({lo}, {hi})")
+        result[name] = (lo, hi)
+    return result
 
 
 class State:
@@ -120,19 +201,29 @@ def _build_action(cmd: dict) -> dict[str, float]:
     return action
 
 
-# --- Zenoh subscribers (callbacks) ------------------------------------------
+# --- WebSocket handler (joint commands, direct from the browser) ------------
 
-def on_arm(sample) -> None:
+async def on_arm_ws(websocket) -> None:
+    peer = websocket.remote_address
+    print(f"[arm_agent] client connected from {peer}", flush=True)
     try:
-        cmd = json.loads(sample.payload.to_bytes().decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return
-    if cmd.get("mode") != "joint_position":
-        return
-    with state.lock:
-        state.arm_cmd = cmd
-        state.last_arm_ts = time.time()
+        async for message in websocket:
+            if not isinstance(message, str):
+                continue
+            try:
+                cmd = json.loads(message)
+            except ValueError:
+                continue
+            if cmd.get("mode") != "joint_position":
+                continue
+            with state.lock:
+                state.arm_cmd = cmd
+                state.last_arm_ts = time.time()
+    except websockets.ConnectionClosed:
+        print(f"[arm_agent] client {peer} disconnected", flush=True)
 
+
+# --- Zenoh subscribers (E-stop / reset, unchanged) ---------------------------
 
 def on_stop(_sample, follower: RebotB601Follower) -> None:
     with state.lock:
@@ -156,14 +247,88 @@ def on_reset(_sample, follower: RebotB601Follower) -> None:
         print(f"[RESET] configure() failed: {exc}")
 
 
+# --- Control loop (background thread) ----------------------------------------
+
+def control_loop(follower: RebotB601Follower, pub_state) -> None:
+    last_beat = 0.0
+    while running:
+        tick_start = time.time()
+        now = tick_start
+        with state.lock:
+            cmd = state.arm_cmd
+            estop = state.estop
+            fresh_cmd = (now - state.last_arm_ts) < ARM_CMD_TIMEOUT_SEC
+
+        moving = fresh_cmd and not estop and cmd is not None
+        if moving:
+            try:
+                follower.send_action(_build_action(cmd))
+            except Exception as exc:
+                print(f"[arm_agent] send_action failed: {exc}")
+
+        if now - last_beat >= HEARTBEAT_PERIOD:
+            last_beat = now
+            try:
+                joints = {
+                    k.removesuffix(".pos"): v
+                    for k, v in follower.get_observation().items()
+                }
+            except Exception as exc:
+                print(f"[arm_agent] get_observation failed: {exc}")
+                joints = {}
+            pub_state.put(json.dumps({
+                "connected": follower.is_connected,
+                "moving": moving,
+                "fresh_cmd": fresh_cmd,
+                "estop": estop,
+                "joints": joints,
+                "ts": now,
+            }))
+
+        # Elapsed-time-aware sleep: a flat time.sleep(CONTROL_PERIOD) would
+        # make the loop run SLOWER than 50Hz by however long
+        # send_action()/get_observation() actually took (silently -- nothing
+        # would ever indicate the loop had fallen behind). Measured cost of
+        # send_action()'s CAN round-trip on this hardware is ~1.2ms
+        # (negligible against the 20ms budget), so this rarely matters in
+        # practice -- but the print below makes a future regression (a flaky
+        # USB moment, a much heavier CAN load) visible instead of just
+        # adding silent, unmeasured latency to every GELLO->arm movement.
+        elapsed = time.time() - tick_start
+        if elapsed > CONTROL_PERIOD:
+            print(f"[arm_agent] tick took {elapsed * 1000:.1f}ms "
+                  f"(budget {CONTROL_PERIOD * 1000:.0f}ms) -- loop running behind", flush=True)
+        time.sleep(max(0.0, CONTROL_PERIOD - elapsed))
+
+
+async def _serve_forever() -> None:
+    async with websockets.serve(on_arm_ws, ARM_WS_HOST, ARM_WS_PORT, ping_interval=20):
+        print(f"arm_agent: listening on ws://{ARM_WS_HOST}:{ARM_WS_PORT}", flush=True)
+        await asyncio.Future()
+
+
 def main() -> None:
+    global running
+
     print(f"arm_agent: connecting to reBot B601 follower on {ARM_PORT} (id={ARM_ID})...")
-    config = RebotB601FollowerRobotConfig(
+    config_kwargs = dict(
         port=ARM_PORT,
         id=ARM_ID,
         max_relative_target=ARM_MAX_RELATIVE_TARGET_DEG,
     )
-    follower = RebotB601Follower(config)
+    joint_limits_override = _load_joint_limits_override()
+    if joint_limits_override is not None:
+        config_kwargs["joint_limits"] = joint_limits_override
+        print("arm_agent: using CUSTOM joint_limits for this run only "
+              f"(ARM_JOINT_LIMITS_FILE={os.environ['ARM_JOINT_LIMITS_FILE']!r}):")
+        for name, (lo, hi) in joint_limits_override.items():
+            print(f"    {name}: ({lo}, {hi})")
+    config = RebotB601FollowerRobotConfig(**config_kwargs)
+    # make_robot_from_config() just dispatches on config.type to
+    # RebotB601Follower(config) -- functionally identical to constructing it
+    # directly, done this way to match
+    # ~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py's pattern.
+    follower = make_robot_from_config(config)
     follower.connect(calibrate=False)  # never block on stdin in a headless service
     if not follower.is_calibrated:
         raise RuntimeError(
@@ -174,70 +339,33 @@ def main() -> None:
         )
     print("arm_agent: follower connected and calibrated.")
 
+    thread = None
     try:
         with zenoh.open(load_robot_config("arm_agent")) as session:
-            session.declare_subscriber("robot/cmd/arm", on_arm)
             session.declare_subscriber("robot/cmd/stop", lambda s: on_stop(s, follower))
             session.declare_subscriber("robot/cmd/reset", lambda s: on_reset(s, follower))
-
             pub_state = session.declare_publisher("robot/arm/state")
 
-            print("arm_agent running. Waiting for robot/cmd/arm...")
-            last_beat = 0.0
+            # Background thread (not asyncio): send_action()/get_observation()
+            # do blocking CAN I/O -- running them as a coroutine on the same
+            # loop as websockets.serve() would stall incoming-message
+            # handling for however long each CAN round-trip takes.
+            thread = threading.Thread(target=control_loop, args=(follower, pub_state), daemon=True)
+            thread.start()
 
+            print("arm_agent running. Waiting for arm WebSocket commands...")
             try:
-                while True:
-                    tick_start = time.time()
-                    now = tick_start
-                    with state.lock:
-                        cmd = state.arm_cmd
-                        estop = state.estop
-                        fresh_cmd = (now - state.last_arm_ts) < ARM_CMD_TIMEOUT_SEC
-
-                    moving = fresh_cmd and not estop and cmd is not None
-                    if moving:
-                        try:
-                            follower.send_action(_build_action(cmd))
-                        except Exception as exc:
-                            print(f"[arm_agent] send_action failed: {exc}")
-
-                    if now - last_beat >= HEARTBEAT_PERIOD:
-                        last_beat = now
-                        try:
-                            joints = {
-                                k.removesuffix(".pos"): v
-                                for k, v in follower.get_observation().items()
-                            }
-                        except Exception as exc:
-                            print(f"[arm_agent] get_observation failed: {exc}")
-                            joints = {}
-                        pub_state.put(json.dumps({
-                            "connected": follower.is_connected,
-                            "moving": moving,
-                            "fresh_cmd": fresh_cmd,
-                            "estop": estop,
-                            "joints": joints,
-                            "ts": now,
-                        }))
-
-                    # Elapsed-time-aware sleep: a flat time.sleep(CONTROL_PERIOD)
-                    # would make the loop run SLOWER than 50Hz by however long
-                    # send_action()/get_observation() actually took (silently --
-                    # nothing would ever indicate the loop had fallen behind).
-                    # Measured cost of send_action()'s CAN round-trip on this
-                    # hardware is ~1.2ms (negligible against the 20ms budget),
-                    # so this rarely matters in practice -- but the print below
-                    # makes a future regression (a flaky USB moment, a much
-                    # heavier CAN load) visible instead of just adding silent,
-                    # unmeasured latency to every GELLO->arm movement.
-                    elapsed = time.time() - tick_start
-                    if elapsed > CONTROL_PERIOD:
-                        print(f"[arm_agent] tick took {elapsed * 1000:.1f}ms "
-                              f"(budget {CONTROL_PERIOD * 1000:.0f}ms) -- loop running behind", flush=True)
-                    time.sleep(max(0.0, CONTROL_PERIOD - elapsed))
+                asyncio.run(_serve_forever())
             except KeyboardInterrupt:
                 pass
     finally:
+        running = False
+        if thread is not None:
+            # Let the control loop finish whatever tick it's mid-way through
+            # (worst case ~CONTROL_PERIOD) before disconnect() runs on this
+            # thread -- otherwise send_action() and disconnect() could race
+            # on the follower object from two threads at once.
+            thread.join(timeout=1.0)
         try:
             follower.disconnect()
             print("\narm_agent stopped, arm torque disabled.")

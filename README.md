@@ -38,18 +38,19 @@ config/
   robot_zenoh.json5     client Zenoh robot (-> IP opérateur)
 operator/
   input_agent.py         joystick + GELLO -> commandes robot
-  web_server.py          pont Zenoh <-> navigateur pour base/bras/état (FastAPI + WebSocket) -- PAS la caméra
+  web_server.py          pont Zenoh <-> navigateur pour base/état/stop-reset (FastAPI + WebSocket) -- PAS la caméra ni les commandes du bras
   web/
     index.html           UI opérateur (markup seul)
     static/app.css       design system (thème sombre poste de pilotage)
     static/js/           modules ES : config (store central), net, videoMux
                          (connexion caméra partagée), camera, camera2,
-                         status, control, joystick, gello, settings, main
+                         armLink (WebSocket direct bras), status, control,
+                         joystick, gello, settings, main
   gello_reader.py        lit le GELLO en série, produit des angles calibrés follower
   gello_calibration.json calibration GELLO déjà mesurée (copie de mon_gello.json)
 robot/
   robot_agent.py         base mecanum : applique les commandes + watchdog LOCAL
-  arm_agent.py            bras B601 : idem, process séparé (env conda lerobot)
+  arm_agent.py            bras B601 : commandes en WebSocket direct (port 8767, PAS Zenoh), process séparé (env conda lerobot)
   uvc_camera_server.py    capture caméra générique + serveur WebSocket multi-caméras
   camera_pub.py           config des 2 caméras -> JPEG -> WebSocket direct navigateur (port 8765, PAS Zenoh)
 scripts/
@@ -103,7 +104,7 @@ en0` (local) ou `tailscale ip -4` (Tailscale) sur le PC opérateur donne l'IP
 
 ```bash
 # PC opérateur
-GELLO_PORT=/dev/tty.usbserial-XXXX scripts/start_operator.sh   # zenohd + web_server + input_agent
+GELLO_PORT=/dev/tty.usbserial-XXXX ROBOT_IP=192.168.15.107 scripts/start_operator.sh   # zenohd + web_server + input_agent
 
 # PC robot
 OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra(s) + bras (défaut)
@@ -213,11 +214,34 @@ PC robot, basé sur le framework `lerobot` (env conda `lerobot`) — voir
 cette calibration.
 
 ```text
-GELLO (série, PC opérateur)                    B601 (CAN, PC robot)
-      |  gello_reader.py (lecture + calibration déjà faite)
+GELLO (série)                                  B601 (CAN, PC robot)
+      |  lecture + calibration déjà faite
       v
-input_agent.py --robot/cmd/arm (Zenoh)--> arm_agent.py --send_action()--> follower
+navigateur (armLink.js) ou input_agent.py (ArmLink)
+      |  WebSocket direct ws://<ip-robot>:8767 (PAS Zenoh)
+      v
+arm_agent.py --send_action()--> follower
 ```
+
+Les commandes de position articulaire (joints + gripper) voyagent en
+**WebSocket direct** navigateur/input_agent.py <-> `arm_agent.py`, comme la
+caméra -- `robot/cmd/arm` (Zenoh) n'existe plus. `robot/cmd/stop` et
+`robot/cmd/reset` (E-stop / réarmement) restent en revanche sur Zenoh,
+**inchangés** : ils sont partagés avec la base, et les déplacer aurait
+découplé cet arrêt d'urgence commun. `arm_agent.py` construit le follower
+via `make_robot_from_config()`, comme
+`~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py` (le script de
+téléop de référence sur ce matériel).
+
+**Pourquoi pas la même connexion que la caméra** : `arm_agent.py` doit
+tourner sous l'env conda `lerobot` (RebotB601Follower/torch) alors que
+`camera_pub.py` a besoin du `cv2` système (GStreamer). Confirmé
+empiriquement (2026-07-09) : le `cv2` de l'env conda `lerobot` n'a **pas**
+de support GStreamer -- le même problème que le opencv-python générique de
+PyPI déjà documenté plus haut. Les deux ne peuvent donc pas partager un seul
+process/une seule connexion sans casser l'un des deux ; `arm_agent.py` ouvre
+donc sa propre connexion WebSocket sur le port 8767, avec la même
+philosophie ("direct, pas de hop Zenoh") mais pas le même socket.
 
 Points clés :
 
@@ -227,7 +251,9 @@ Points clés :
   ça avec la boucle 100Hz déjà validée de `robot_agent.py` (base). Doit donc
   tourner avec le python de l'env conda `lerobot`, pas le `.venv` du projet
   (voir `scripts/start_arm.sh`, override `ARM_PYTHON=` si le chemin de l'env
-  diffère).
+  diffère). Cet env a maintenant aussi besoin du paquet `websockets`
+  (`~/miniconda3/envs/lerobot/bin/pip install websockets`) -- absent par
+  défaut, `arm_agent.py` ne démarrera pas sans.
 - **`gello_reader.py` ne dépend pas de lerobot** : réimplémentation autonome
   (pyserial) de la lecture série + de la formule de calibration de
   `GelloAs5600Leader.get_action()` (lissage -> clip aux butées -> sens ->
@@ -236,12 +262,16 @@ Points clés :
   `mon_gello.json`). Nécessite `GELLO_PORT` (variable d'env, ex.
   `/dev/tty.usbserial-XXXX` sur macOS) — sans elle, désactivé proprement (pas
   d'auto-probe : le mauvais port série n'est pas un risque à prendre).
+  `input_agent.py` a aussi besoin de `ROBOT_IP` (IP directe du PC robot, pas
+  routée par Zenoh) pour joindre `arm_agent.py` -- non requis tant qu'aucun
+  GELLO n'est détecté (pilotage base seul au joystick reste possible sans).
 - **Gating indépendant de la base** : contrairement à `robot/cmd/base`, le
   bras n'est **pas** gaté par le homme-mort manette (piloter un bras 7 DOF
   demande les deux mains). `arm_agent.py` a son propre watchdog de fraîcheur
-  (`ARM_CMD_TIMEOUT_SEC`) : sans commande fraîche, il arrête juste d'envoyer
-  de nouvelles cibles (les moteurs Damiao tiennent seuls leur dernière
-  consigne — rien d'équivalent au ramp-to-zero de la base n'est nécessaire).
+  (`ARM_CMD_TIMEOUT_SEC`), maintenant basé sur la dernière commande reçue
+  par WebSocket : sans commande fraîche, il arrête juste d'envoyer de
+  nouvelles cibles (les moteurs Damiao tiennent seuls leur dernière consigne
+  — rien d'équivalent au ramp-to-zero de la base n'est nécessaire).
   `robot/cmd/stop`/`robot/cmd/reset` restent **partagés** avec la base : un
   seul arrêt d'urgence coupe les deux.
 - **Filet de sécurité supplémentaire** pour ce premier vrai essai sur ce
@@ -318,7 +348,6 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 | Clé                          | Sens | Contenu                                   |
 | ---------------------------- | ---- | ----------------------------------------- |
 | `robot/cmd/base`             | ->   | `{"vx","vy","wz"}` normalisés `[-1, 1]`   |
-| `robot/cmd/arm`              | ->   | `{"joints": {nom: deg, ...}, "gripper", "mode"}` (déjà calibré côté follower, degrés) |
 | `robot/cmd/stop`             | ->   | arrêt d'urgence (latch) — partagé base + bras |
 | `robot/cmd/reset`            | ->   | lève le verrou E-stop + réactive les moteurs (deadman toujours requis pour bouger la base) — partagé base + bras |
 | `operator/deadman`           | ->   | `"true"` / `"false"` (base uniquement, pas le bras) |
@@ -329,7 +358,12 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 Les caméras ne sont **pas** des topics Zenoh : `camera_pub.py` sert le JPEG
 des deux caméras directement au navigateur sur une seule connexion
 WebSocket (`ws://<ip-robot>:8765`), voir [Structure](#structure) et le
-diagramme en tête de fichier.
+diagramme en tête de fichier. Les commandes de position du bras non plus :
+`arm_agent.py` les reçoit directement en WebSocket (`ws://<ip-robot>:8767`,
+connexion séparée de celle des caméras -- voir [Bras GELLO -> reBot
+B601](#bras-gello--rebot-b601-leader-follower) pour pourquoi). Seuls
+`robot/cmd/stop`/`robot/cmd/reset`/`robot/arm/state` restent sur Zenoh pour
+le bras.
 
 Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur ; `robot_agent.py`
 le mixe en cinématique mecanum puis met à l'échelle par `MAX_VEL`/`ROT_VEL`
@@ -351,7 +385,7 @@ ces protections logicielles.
 
 Le bras a son **propre watchdog local**, dans `arm_agent.py`, indépendant de
 celui de `robot_agent.py` (process séparé) : pas de nouvelle consigne
-envoyée sans commande `robot/cmd/arm` fraîche (`ARM_CMD_TIMEOUT_SEC`), plus
+envoyée sans commande WebSocket fraîche (`ARM_CMD_TIMEOUT_SEC`), plus
 `max_relative_target` comme filet en plus du lissage déjà fait côté GELLO.
 `robot/cmd/stop` coupe aussi le bras (`disable_torque()`) ; `robot/cmd/reset`
 le réarme. Détails : [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower).

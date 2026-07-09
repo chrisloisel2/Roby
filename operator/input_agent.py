@@ -21,6 +21,14 @@ style:
 Base command contract: vx / vy / wz are normalized to [-1, 1]; vx=forward,
 vy=lateral (right +), wz=rotation. The robot agent mixes these into mecanum
 wheel targets and scales by its own MAX_VEL/ROT_VEL.
+
+Arm (GELLO) commands go DIRECTLY to robot/arm_agent.py's own WebSocket
+(ws://<robot-ip>:8767), NOT over Zenoh -- same change as the browser's own
+GELLO path (operator/web/static/js/armLink.js), for the same reason: one
+fewer hop, and arm_agent.py no longer has a robot/cmd/arm Zenoh subscriber
+at all. Requires ROBOT_IP (the robot PC's address, not Zenoh-routed) --
+only enforced once a GELLO is actually detected, so joystick-only base
+control still works with no GELLO and no ROBOT_IP set.
 """
 import json
 import math
@@ -38,9 +46,14 @@ os.environ.setdefault("SDL_JOYSTICK_HIDAPI", "0")
 
 import pygame
 import zenoh
+from websockets.sync.client import connect as ws_connect
 
 PUBLISH_PERIOD = 0.02  # 50 Hz
 DEADMAN_BUTTON = 0     # joystick button index used as deadman
+
+ARM_WS_PORT = 8767            # robot/arm_agent.py's own WebSocket (not Zenoh)
+ARM_RECONNECT_INTERVAL = 2.0  # don't retry more often than this while the arm link is down
+ARM_WS_OPEN_TIMEOUT = 1.0     # bound the worst-case stall of the 50Hz loop on a dead robot IP
 
 # Axes (Thrustmaster T.Flight Stick X: 0=X, 1=Y, 2=twist/rudder, 3=throttle).
 AXIS_STICK_X = 0
@@ -51,7 +64,7 @@ DEADZONE = 0.25           # stick: below this magnitude -> STOP, not drift
 ROTATION_DEADZONE = 0.15  # twist axis: below this -> no rotation, not drift
 
 # GELLO integration point. Provide a reader that returns a dict like:
-#   {"joints": [...], "gripper": float, "mode": "joint_position"}
+#   {"joints": {name: deg, ...}, "gripper": float, "mode": "joint_position"}
 # or None when no GELLO is connected. Left as a stub for now.
 try:
     from gello_reader import read_gello  # type: ignore
@@ -103,6 +116,49 @@ def load_config() -> zenoh.Config:
     return zenoh.Config.from_file(str(path))
 
 
+class ArmLink:
+    """Direct WebSocket connection to robot/arm_agent.py, replacing the old
+    Zenoh robot/cmd/arm publisher. Connects lazily (only once a GELLO
+    reading actually needs sending) and reconnects on failure, throttled to
+    ARM_RECONNECT_INTERVAL so a robot that's down/unreachable can't stall
+    this process's 50Hz loop (bounded by ARM_WS_OPEN_TIMEOUT per attempt,
+    not the default ~10s) -- a dropped/failed arm link degrades to "GELLO
+    commands are silently not delivered", never to "the base stops
+    responding too".
+    """
+
+    def __init__(self, robot_ip: str):
+        self.url = f"ws://{robot_ip}:{ARM_WS_PORT}"
+        self._ws = None
+        self._last_attempt = 0.0
+
+    def send(self, cmd: dict) -> None:
+        if self._ws is None:
+            now = time.time()
+            if now - self._last_attempt < ARM_RECONNECT_INTERVAL:
+                return
+            self._last_attempt = now
+            try:
+                self._ws = ws_connect(self.url, open_timeout=ARM_WS_OPEN_TIMEOUT, close_timeout=0.5)
+                print(f"input_agent: connected to arm link at {self.url}")
+            except Exception as exc:
+                print(f"[input_agent] arm link connect failed ({self.url}): {exc}")
+                return
+        try:
+            self._ws.send(json.dumps(cmd))
+        except Exception as exc:
+            print(f"[input_agent] arm link send failed: {exc}")
+            self.close()
+
+    def close(self) -> None:
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+
+
 def main() -> None:
     pygame.init()
     pygame.joystick.init()
@@ -120,9 +176,11 @@ def main() -> None:
     joy.init()
     print(f"Joystick: {joy.get_name()}")
 
+    arm_link: ArmLink | None = None
+    warned_no_robot_ip = False
+
     with zenoh.open(load_config()) as session:
         pub_base = session.declare_publisher("robot/cmd/base")
-        pub_arm = session.declare_publisher("robot/cmd/arm")
         pub_deadman = session.declare_publisher("operator/deadman")
         pub_joystick = session.declare_publisher("operator/input/joystick")
 
@@ -136,11 +194,20 @@ def main() -> None:
                 # joystick deadman -- operating a 7-DOF leader arm needs both
                 # hands, so requiring the joystick button held at the same
                 # time isn't workable. Safety for the arm instead comes from
-                # the robot-side watchdog on robot/cmd/arm freshness.
+                # the robot-side watchdog on the arm link's freshness.
                 gello = read_gello()
                 if gello is not None:
-                    gello["ts"] = time.time()
-                    pub_arm.put(json.dumps(gello))
+                    if arm_link is None:
+                        robot_ip = os.environ.get("ROBOT_IP")
+                        if robot_ip:
+                            arm_link = ArmLink(robot_ip)
+                        elif not warned_no_robot_ip:
+                            print("[input_agent] GELLO detected but ROBOT_IP is not set -- "
+                                  "arm commands will be dropped. Set ROBOT_IP=<robot ip> to "
+                                  "enable arm teleop.", flush=True)
+                            warned_no_robot_ip = True
+                    if arm_link is not None:
+                        arm_link.send(gello)
 
                 if not deadman:
                     pub_base.put(json.dumps({"vx": 0.0, "vy": 0.0, "wz": 0.0}))
@@ -166,6 +233,8 @@ def main() -> None:
             # Best effort: tell the robot to stop as we leave.
             pub_base.put(json.dumps({"vx": 0.0, "vy": 0.0, "wz": 0.0}))
             pub_deadman.put("false")
+            if arm_link is not None:
+                arm_link.close()
             print("\ninput_agent stopped.")
 
 
