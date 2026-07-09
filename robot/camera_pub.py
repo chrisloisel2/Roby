@@ -1,48 +1,50 @@
 #!/usr/bin/env python3
-"""Robot-side camera publisher.
+"""Robot-side camera server.
 
-Reads a camera, encodes each frame as JPEG, and publishes it on Zenoh.
+Captures 1920x1200 and serves it straight to the browser over a raw
+WebSocket (ws://<robot-ip>:8765), bypassing Zenoh entirely -- the browser
+connects to this process directly (see operator/web/static/js/camera.js).
+Zenoh still carries base/arm control and state; only the video path is
+direct, because JPEG-over-Zenoh-over-another-WebSocket-hop added latency
+for no benefit at this resolution.
 
-MVP: JPEG over Zenoh at 1920x1080. For true low latency at high resolution,
-move the video to H.264/WebRTC and keep Zenoh for commands, state,
-heartbeat, and supervision.
+Capture (camera_loop, background thread) and delivery (stream, per client)
+are decoupled: the thread always holds only the newest encoded frame
+(latest_jpeg/latest_id under a lock), and each client coroutine sends it the
+instant it changes. A slow client or a stalled encode never queues up stale
+frames -- both sides just skip straight to whatever is newest.
 
-Resolution note (2026-07-07): 1920x1080 and 1280x720 previously measured at
-5.0fps / 10.0fps on this camera (vs 29.9fps at 640x480 -- see git history),
-degraded by a failed mode negotiation. CAPTURE stays at 1920x1080 despite
-that (kept per prior request, and changing it risks retriggering that same
-negotiation regression) -- but the frame actually encoded/published is
-downscaled to STREAM_WIDTH/STREAM_HEIGHT first (same aspect ratio, so FOV is
-unchanged), which is what actually cuts per-frame encode time and payload
-size. This -- capture-then-downscale, no artificial frame-rate cap, higher
-JPEG_QUALITY on the smaller frame, raw binary transport all the way to the
-browser -- mirrors a known-good low-latency reference pipeline.
+Known camera-specific pitfalls (HSTD USB3.0 UVC camera on this robot),
+already worked around below -- do not "fix" these back:
+  - Never call cap.set(cv2.CAP_PROP_FPS, ...): requesting an explicit FPS
+    this camera doesn't natively expose at this resolution breaks the
+    GStreamer pipeline negotiation outright (isOpened() goes False).
+  - /dev/videoN is not stable across boots/USB re-enumeration, and USB
+    webcams commonly expose a second metadata-only node that opens but
+    never reads -- open_camera() probes indices and keeps the first one
+    that both opens AND delivers a real frame.
 """
+import asyncio
 import os
-import sys
+import socket
+import threading
 import time
-from pathlib import Path
 
 import cv2
-import zenoh
+import websockets
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from zenoh_config import load_robot_config
+HOST = "0.0.0.0"
+PORT = 8765
 
-KEY = "robot/camera/front/jpeg"
-WIDTH, HEIGHT = 1920, 1080
-STREAM_WIDTH, STREAM_HEIGHT = 960, 540  # same 16:9 aspect as WIDTH/HEIGHT -> FOV unchanged
-JPEG_QUALITY = 80  # safe to keep high: applied to the downscaled stream frame, not the full capture
+WIDTH = 1920
+HEIGHT = 1200
+JPEG_QUALITY = 60
 MAX_PROBE_INDEX = 8  # highest /dev/videoN index to try when auto-detecting
-# Physical mount: was upside-down, corrected by ROTATE_180 (image confirmed
-# upright). Camera remounted inverted again (2026-07-07) -- that 180° flip
-# now cancels the previous one, so no software rotation is needed.
-ROTATE = None
-# Diagnostic only, off by default: burns the robot's wall-clock time into
-# each frame so true end-to-end (capture-to-screen) latency can be measured
-# by comparing it against the viewer's clock -- catches latency hidden
-# inside the camera's own firmware/driver that per-stage timing can't see.
-DEBUG_TIMESTAMP = os.environ.get("DEBUG_TIMESTAMP", "0") == "1"
+
+latest_jpeg: bytes | None = None
+latest_id = 0
+lock = threading.Lock()
+running = True
 
 
 def open_camera(camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
@@ -68,80 +70,111 @@ def open_camera(camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
     raise RuntimeError(f"No working camera found (tried {tried})")
 
 
-def main() -> None:
-    with zenoh.open(load_robot_config("camera_pub")) as session:
-        # DROP + express: under network congestion, prefer dropping a stale
-        # frame over queueing it — queueing is exactly what turns a slow link
-        # into ever-growing latency instead of just a lower delivered fps.
-        pub = session.declare_publisher(
-            KEY,
-            congestion_control=zenoh.CongestionControl.DROP,
-            express=True,
-        )
-        env_id = os.environ.get("CAMERA_ID")
-        cap, camera_id = open_camera(int(env_id) if env_id is not None else None)
-        # Most UVC webcams only expose their raw (YUYV) format at high
-        # resolutions like 1080p at a few fps — USB bandwidth for uncompressed
-        # video that large is too high. Requesting MJPG (compressed in the
-        # camera's own hardware) is what actually unlocks 30fps at 1080p; this
-        # must be set before the resolution for the driver to renegotiate.
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-        # Keep the driver's internal buffer at 1 frame so cap.read() always
-        # returns the newest frame instead of draining a backlog that was
-        # queued while we were busy encoding/publishing the previous one.
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        # Deliberately NOT setting CAP_PROP_FPS: on some UVC cameras (GStreamer
-        # backend) requesting an explicit fps the camera doesn't natively
-        # expose at this resolution breaks pipeline renegotiation entirely
-        # (isOpened() becomes False). We instead read at the camera's native
-        # rate, with no artificial cap on the publish side either -- Zenoh's
-        # DROP + express congestion control (above) already discards a stale
-        # frame under backpressure instead of queueing it, so there's nothing
-        # for an extra frame_period throttle here to protect against.
-        print(f"camera_pub streaming camera {camera_id} on '{KEY}'")
+def camera_loop(camera_id: int | None) -> None:
+    global latest_jpeg, latest_id, running
 
-        try:
-            while True:
-                t_read0 = time.monotonic()
-                ok, frame = cap.read()
-                read_ms = (time.monotonic() - t_read0) * 1000
-                if read_ms > 100:
-                    print(f"[camera_pub] cap.read() stalled: {read_ms:.0f}ms (ok={ok})", flush=True)
-                if not ok:
-                    print("[camera_pub] cap.read() returned ok=False, retrying in 0.1s", flush=True)
-                    time.sleep(0.1)
-                    continue
+    cap, idx = open_camera(camera_id)
 
-                if ROTATE is not None:
-                    frame = cv2.rotate(frame, ROTATE)
+    # MJPG (compressed in the camera's own hardware) before the resolution:
+    # this camera's raw (YUYV) format can't sustain 1920x1200 over USB
+    # bandwidth at a usable framerate, and the FOURCC must be set first for
+    # the driver to renegotiate correctly.
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+    # Keep the driver's internal buffer at 1 frame so cap.read() always
+    # returns the newest frame instead of draining a backlog queued while we
+    # were busy encoding/sending the previous one.
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-                frame = cv2.resize(frame, (STREAM_WIDTH, STREAM_HEIGHT))
+    print(f"camera_pub: streaming camera index {idx} on ws://{HOST}:{PORT}")
+    print("Camera configuration:")
+    print("  FOURCC:", int(cap.get(cv2.CAP_PROP_FOURCC)))
+    print("  Width :", cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    print("  Height:", cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print("  FPS   :", cap.get(cv2.CAP_PROP_FPS))
 
-                if DEBUG_TIMESTAMP:
-                    cv2.putText(frame, f"{time.time():.3f}", (10, 40),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 2, cv2.LINE_AA)
+    try:
+        while running:
+            ok, frame = cap.read()
 
-                t_enc0 = time.monotonic()
-                ok, jpg = cv2.imencode(
-                    ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
-                )
-                enc_ms = (time.monotonic() - t_enc0) * 1000
-                if enc_ms > 60:
-                    print(f"[camera_pub] cv2.imencode() stalled: {enc_ms:.0f}ms", flush=True)
-                if ok:
-                    t_pub0 = time.monotonic()
-                    pub.put(jpg.tobytes())
-                    pub_ms = (time.monotonic() - t_pub0) * 1000
-                    if pub_ms > 60:
-                        print(f"[camera_pub] pub.put() stalled: {pub_ms:.0f}ms", flush=True)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            cap.release()
-            print("\ncamera_pub stopped.")
+            if not ok:
+                time.sleep(0.001)
+                continue
+
+            ok, jpeg = cv2.imencode(
+                ".jpg",
+                frame,
+                [
+                    cv2.IMWRITE_JPEG_QUALITY,
+                    JPEG_QUALITY,
+                    cv2.IMWRITE_JPEG_OPTIMIZE,
+                    0,
+                ],
+            )
+
+            if not ok:
+                continue
+
+            with lock:
+                latest_jpeg = jpeg.tobytes()
+                latest_id += 1
+    finally:
+        cap.release()
+
+
+async def stream(websocket):
+    print("Client connected")
+
+    sock = websocket.transport.get_extra_info("socket")
+    if sock is not None:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    last_sent_id = -1
+
+    try:
+        while True:
+            with lock:
+                jpeg = latest_jpeg
+                frame_id = latest_id
+
+            if jpeg is None or frame_id == last_sent_id:
+                await asyncio.sleep(0.001)
+                continue
+
+            last_sent_id = frame_id
+            await websocket.send(jpeg)
+            await asyncio.sleep(0)  # give control back to asyncio
+    except websockets.ConnectionClosed:
+        print("Client disconnected")
+
+
+async def main() -> None:
+    env_id = os.environ.get("CAMERA_ID")
+    thread = threading.Thread(
+        target=camera_loop, args=(int(env_id) if env_id is not None else None,), daemon=True
+    )
+    thread.start()
+
+    async with websockets.serve(
+        stream,
+        HOST,
+        PORT,
+        max_size=None,
+        max_queue=1,
+        compression=None,
+        ping_interval=None,
+        write_limit=(1024 * 1024, 0),  # (high, low) write-buffer watermarks; see stream()
+    ):
+        print(f"Listening on ws://{HOST}:{PORT}")
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        running = False
+        print("\ncamera_pub stopped.")

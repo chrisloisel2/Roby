@@ -2,7 +2,7 @@
 //
 //   config.js    central settings store (localStorage, versioned, exportable)
 //   net.js       auto-reconnecting WebSockets
-//   camera.js    /ws/camera -> canvas (latest-frame rendering)
+//   camera.js    ws://<robot-ip>:8765 (direct to robot) -> canvas (latest-frame rendering)
 //   status.js    /ws/status -> tiles, banner, arm joint gauges
 //   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control
 //   joystick.js  Gamepad API + dynamic mapping

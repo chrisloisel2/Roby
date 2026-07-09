@@ -1,8 +1,10 @@
 # Shared dependencies for both PCs.
 # The operator PC needs all of them: pip install -r requirements.txt
 #
-# The ROBOT PC only strictly needs eclipse-zenoh, dmcan_sdk and pyusb
-# (+ opencv-python if it has no working system OpenCV already). DO NOT
+# The ROBOT PC only strictly needs eclipse-zenoh, dmcan_sdk, pyusb and
+# websockets (+ opencv-python if it has no working system OpenCV already).
+# websockets is for camera_pub.py's own WebSocket server (it serves video
+# straight to the browser, ws://<robot-ip>:8765 -- not over Zenoh). DO NOT
 # blindly `pip install -r requirements.txt` for a venv on the robot: the
 # generic opencv-python PyPI wheel is built WITHOUT GStreamer and its V4L2
 # backend has failed outright ("can't open camera by index") on at least one
@@ -11,7 +13,7 @@
 # --system-site-packages and only install what's actually missing so it
 # inherits the working system cv2 instead of shadowing it with a broken one:
 #     python3 -m venv --system-site-packages .venv
-#     .venv/bin/pip install eclipse-zenoh dmcan_sdk pyusb
+#     .venv/bin/pip install eclipse-zenoh dmcan_sdk pyusb websockets
 #
 # robot/damiao.py and robot/dlls/libdm_device.so are vendored in this repo
 # (not on PyPI): a modified copy of the DAMIAO vendor SDK with the DMS2325

@@ -7,13 +7,19 @@
 const BACKOFF_MIN_MS = 400;
 const BACKOFF_MAX_MS = 3000;
 
+// `path` is normally a same-origin path relayed through web_server.py (e.g.
+// "/ws/status"), resolved against location.host. Pass a full "ws://host:port"
+// URL instead to talk to a different host directly (e.g. camera.js's direct
+// connection to robot/camera_pub.py's own WebSocket server, bypassing
+// web_server.py entirely).
 export function createSocket(path, { onMessage, onOpen, binary = false } = {}) {
 	let sock = null;
 	let alive = false;
 	let backoff = BACKOFF_MIN_MS;
+	const url = /^wss?:\/\//.test(path) ? path : `ws://${location.host}${path}`;
 
 	const connect = () => {
-		sock = new WebSocket(`ws://${location.host}${path}`);
+		sock = new WebSocket(url);
 		if (binary) sock.binaryType = "arraybuffer";
 		sock.onopen = () => {
 			alive = true;

@@ -118,7 +118,9 @@ if ! kill -0 "$AGENT_PID" 2>/dev/null; then
 fi
 echo "start_robot.sh: robot_agent.py démarré (pid $AGENT_PID)." >&2
 
-OPERATOR_IP="$OPERATOR_IP" "$PY" -u robot/camera_pub.py > "$CAMERA_LOG" 2>&1 &
+# camera_pub.py doesn't use Zenoh/OPERATOR_IP: it serves video straight to
+# the browser over its own WebSocket server (ws://<robot-ip>:8765).
+"$PY" -u robot/camera_pub.py > "$CAMERA_LOG" 2>&1 &
 CAMERA_PID=$!
 trap 'kill $AGENT_PID $CAMERA_PID 2>/dev/null || true' EXIT
 

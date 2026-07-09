@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Operator-side web server.
 
-Bridges Zenoh <-> browser. The browser never speaks Zenoh directly: this
-server relays the robot camera/state to the browser and forwards operator
-commands (base, deadman, gripper, E-stop, reset) from the browser to Zenoh.
+Bridges Zenoh <-> browser for state/control. The browser never speaks Zenoh
+directly: this server relays robot/arm state to the browser and forwards
+operator commands (base, deadman, gripper, E-stop, reset) from the browser
+to Zenoh.
 
     Browser  <--WebSocket-->  web_server.py  <--Zenoh-->  robot PC
+
+Video is NOT part of this bridge: the browser connects straight to
+robot/camera_pub.py's own WebSocket server (ws://<robot-ip>:8765, see
+static/js/camera.js) for lower latency than an extra JPEG-over-Zenoh hop
+would add. Losing this server does not lose the camera feed.
 
 Endpoints
 ---------
@@ -14,8 +20,7 @@ GET  /static/*                  the UI's assets (operator/web/static: css + JS m
 GET  /gello_calibration.json   GELLO calibration, fetched once by the browser's
                                 own Web Serial reader (see static/js/gello.js) so
                                 the measured values aren't duplicated in the page.
-WS   /ws/camera                server -> browser : binary JPEG frames
-WS   /ws/status                server -> browser : robot heartbeat, reported state, fps, arm state
+WS   /ws/status                server -> browser : robot heartbeat, reported state, arm state
 WS   /ws/control               browser -> server : {type: base|deadman|stop|reset|gripper|arm}
 
 Note: run ONE operator input source at a time (this web UI OR input_agent.py) —
@@ -27,7 +32,6 @@ toggle in index.html.
 import asyncio
 import json
 import time
-from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -41,49 +45,18 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 CONFIG = Path(__file__).resolve().parent.parent / "config" / "operator_zenoh.json5"
 GELLO_CALIBRATION_PATH = Path(__file__).resolve().parent / "gello_calibration.json"
 
-CAMERA_KEY = "robot/camera/front/jpeg"
 HEARTBEAT_KEY = "robot/heartbeat"
 STATE_KEY = "robot/state"
 ARM_STATE_KEY = "robot/arm/state"
 STALE_AFTER = 1.0  # seconds without data => considered lost
 
 # --- Shared state (written by Zenoh callbacks, read by WS coroutines) --------
-_frame = {"data": None, "ts": 0.0}
-_frame_times = deque(maxlen=30)
 _heartbeat_ts = 0.0
 _robot_state = {}
 _arm_state = {}
 
 # --- Zenoh handles, populated on startup -------------------------------------
 Z = {"session": None, "base": None, "stop": None, "reset": None, "deadman": None, "gripper": None, "arm": None}
-
-# Per-connected-client wakeups for /ws/camera, so a new frame is pushed the
-# instant it arrives instead of the old fixed 1/30s poll (which both capped
-# latency at ~33ms extra and silently dropped delivery above 30fps).
-_camera_events: set[asyncio.Event] = set()
-_loop: asyncio.AbstractEventLoop | None = None
-
-
-def _notify_camera_clients() -> None:
-    for event in _camera_events:
-        event.set()
-
-
-_last_on_camera_ts = 0.0
-
-
-def on_camera(sample):
-    global _last_on_camera_ts
-    now = time.time()
-    gap_ms = (now - _last_on_camera_ts) * 1000 if _last_on_camera_ts else 0
-    _last_on_camera_ts = now
-    if gap_ms > 100:
-        print(f"[web_server] on_camera() gap: {gap_ms:.0f}ms (Zenoh delivery to this callback)", flush=True)
-    _frame["data"] = sample.payload.to_bytes()
-    _frame["ts"] = now
-    _frame_times.append(now)
-    if _loop is not None:
-        _loop.call_soon_threadsafe(_notify_camera_clients)
 
 
 def on_heartbeat(_sample):
@@ -107,19 +80,9 @@ def on_arm_state(sample):
         pass
 
 
-def _fps() -> float:
-    if len(_frame_times) < 2:
-        return 0.0
-    span = _frame_times[-1] - _frame_times[0]
-    return round((len(_frame_times) - 1) / span, 1) if span > 0 else 0.0
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global _loop
-    _loop = asyncio.get_running_loop()
     session = zenoh.open(zenoh.Config.from_file(str(CONFIG)))
-    session.declare_subscriber(CAMERA_KEY, on_camera)
     session.declare_subscriber(HEARTBEAT_KEY, on_heartbeat)
     session.declare_subscriber(STATE_KEY, on_state)
     session.declare_subscriber(ARM_STATE_KEY, on_arm_state)
@@ -160,44 +123,19 @@ async def gello_calibration():
     return FileResponse(GELLO_CALIBRATION_PATH)
 
 
-@app.websocket("/ws/camera")
-async def camera_ws(ws: WebSocket):
-    await ws.accept()
-    event = asyncio.Event()
-    _camera_events.add(event)
-    last_ts = 0.0
-    try:
-        if _frame["data"] is not None:
-            last_ts = _frame["ts"]
-            await ws.send_bytes(_frame["data"])
-        while True:
-            await event.wait()
-            event.clear()
-            data, ts = _frame["data"], _frame["ts"]
-            if data is not None and ts != last_ts:
-                last_ts = ts
-                await ws.send_bytes(data)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        _camera_events.discard(event)
-
-
 @app.websocket("/ws/status")
 async def status_ws(ws: WebSocket):
     await ws.accept()
     try:
         while True:
             now = time.time()
-            # _arm_state has no separate heartbeat topic (unlike robot/camera
-            # above): go stale/empty past STALE_AFTER using its own "ts"
-            # field instead, so a dead arm_agent.py doesn't leave the UI
-            # showing a frozen "connected" forever.
+            # _arm_state has no separate heartbeat topic: go stale/empty past
+            # STALE_AFTER using its own "ts" field instead, so a dead
+            # arm_agent.py doesn't leave the UI showing a frozen "connected"
+            # forever.
             arm_fresh = bool(_arm_state) and (now - _arm_state.get("ts", 0)) < STALE_AFTER
             await ws.send_text(json.dumps({
                 "robot": (now - _heartbeat_ts) < STALE_AFTER,
-                "camera": (now - _frame["ts"]) < STALE_AFTER,
-                "fps": _fps(),
                 "state": _robot_state,
                 "arm": _arm_state if arm_fresh else {},
             }))

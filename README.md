@@ -7,12 +7,17 @@ GELLO, caméra et interface web. Deux PC : opérateur et robot.
 [Joystick + GELLO]
         v
 [PC opérateur]  input_agent.py · web_server.py · zenohd
-        |  Zenoh TCP
-        v
+        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (caméra, port 8765)
+        v                                  |
 [PC robot]      robot_agent.py (base) · arm_agent.py (bras) · camera_pub.py
         v
 [Robot + bras + caméra]
 ```
+
+Seuls base/bras/état passent par Zenoh + web_server.py. La caméra est un
+lien **WebSocket direct** navigateur <-> `camera_pub.py` (pas de hop Zenoh ni
+web_server.py sur ce chemin) — voir [Structure](#structure) et la table des
+clés Zenoh plus bas.
 
 `robot_agent.py` (base) et `arm_agent.py` (bras) sont deux process **séparés**
 sur le PC robot, avec chacun son propre watchdog de sécurité local — voir
@@ -27,7 +32,7 @@ config/
   robot_zenoh.json5     client Zenoh robot (-> IP opérateur)
 operator/
   input_agent.py         joystick + GELLO -> commandes robot
-  web_server.py          pont Zenoh <-> navigateur (FastAPI + WebSocket)
+  web_server.py          pont Zenoh <-> navigateur pour base/bras/état (FastAPI + WebSocket) -- PAS la caméra
   web/
     index.html           UI opérateur (markup seul)
     static/app.css       design system (thème sombre poste de pilotage)
@@ -38,7 +43,7 @@ operator/
 robot/
   robot_agent.py         base mecanum : applique les commandes + watchdog LOCAL
   arm_agent.py            bras B601 : idem, process séparé (env conda lerobot)
-  camera_pub.py           caméra -> JPEG -> Zenoh
+  camera_pub.py           caméra -> JPEG -> WebSocket direct navigateur (port 8765, PAS Zenoh)
 scripts/
   start_operator.sh      lance zenohd + web_server + input_agent
   start_robot.sh         lance robot_agent + camera_pub
@@ -93,9 +98,13 @@ en0` (local) ou `tailscale ip -4` (Tailscale) sur le PC opérateur donne l'IP
 GELLO_PORT=/dev/tty.usbserial-XXXX scripts/start_operator.sh   # zenohd + web_server + input_agent
 
 # PC robot
-OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra
+OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base (Zenoh) + caméra (WebSocket direct, pas besoin d'OPERATOR_IP)
 OPERATOR_IP=192.168.15.106 scripts/start_arm.sh     # bras -- voir section dédiée, séparé exprès
 ```
+
+La page opérateur se connecte à la caméra via `?robotIp=<ip-robot>` dans
+l'URL (défaut : `169.254.222.31`, voir `DEFAULT_ROBOT_IP` dans
+`operator/web/static/js/camera.js`) — à ajuster si l'IP du robot diffère.
 
 `GELLO_PORT` est optionnel : sans lui, `input_agent.py` tourne normalement
 (base + web) mais le bras GELLO reste désactivé (`read_gello()` renvoie
@@ -131,18 +140,21 @@ homme-mort reste requis pour bouger réellement).
 ```bash
 # Sur le PC robot :
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install eclipse-zenoh dmcan_sdk pyusb
+.venv/bin/pip install eclipse-zenoh dmcan_sdk pyusb websockets
 export OPERATOR_IP=<ip_pc_operateur>
 .venv/bin/python3 robot/robot_agent.py
 ```
 
 `camera_pub.py` de ce dépôt fonctionne avec la caméra USB branchée sur ce
-robot (HSTD USB3.0). Deux pièges rencontrés, tous deux déjà corrigés dans le
-code : ne pas forcer `CAP_PROP_FPS` via `cap.set()` (casse la pipeline
-GStreamer sur cette caméra — le débit ~15 FPS est donc limité côté logiciel
-via `time.sleep`), et l'index `/dev/videoN` n'est pas fiable d'un boot à
-l'autre (renumérotation USB) — `camera_pub.py` sonde et retient
-automatiquement le premier index qui délivre une vraie frame.
+robot (HSTD USB3.0), capturée en 1920x1200 et servie directement au
+navigateur par son propre serveur WebSocket (`ws://<ip-robot>:8765`, pas de
+Zenoh sur ce chemin — n'a donc pas besoin de `OPERATOR_IP`). Deux pièges
+rencontrés, tous deux déjà corrigés dans le code : ne pas forcer
+`CAP_PROP_FPS` via `cap.set()` (casse la négociation de la pipeline
+GStreamer sur cette caméra à cette résolution), et l'index `/dev/videoN`
+n'est pas fiable d'un boot à l'autre (renumérotation USB) —
+`camera_pub.py` sonde et retient automatiquement le premier index qui
+délivre une vraie frame.
 
 ## Bras GELLO -> reBot B601 (leader-follower)
 
@@ -268,7 +280,11 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 | `robot/heartbeat`            | <-   | vivacité robot base (~5 Hz)               |
 | `robot/state`                | <-   | `{moving, estop, deadman_ok, fresh_cmd, ts}` (base) |
 | `robot/arm/state`            | <-   | `{connected, moving, fresh_cmd, estop, joints, ts}` (bras) |
-| `robot/camera/front/jpeg`    | <-   | image JPEG                                |
+
+La caméra n'est **pas** un topic Zenoh : `camera_pub.py` sert le JPEG
+directement au navigateur via son propre serveur WebSocket
+(`ws://<ip-robot>:8765`), voir [Structure](#structure) et le diagramme en
+tête de fichier.
 
 Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur ; `robot_agent.py`
 le mixe en cinématique mecanum puis met à l'échelle par `MAX_VEL`/`ROT_VEL`
@@ -301,9 +317,10 @@ le réarme. Détails : [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader
   des no-op **volontaires** : le bras est piloté par le process séparé
   `arm_agent.py` (voir [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower)),
   pas par `robot_agent.py`.
-- Caméra en JPEG/Zenoh = MVP 10–20 FPS en 640×480. Pour de la basse latence
-  haute résolution, passer la vidéo en H.264/WebRTC et garder Zenoh pour les
-  commandes, l'état, le heartbeat et la supervision.
+- Caméra : JPEG en 1920×1200, servi par `camera_pub.py` directement au
+  navigateur en WebSocket (`ws://<ip-robot>:8765`), plus de hop Zenoh ni
+  web_server.py sur ce chemin — Zenoh garde les commandes, l'état, le
+  heartbeat et la supervision.
 
 ## Plan de réalisation
 
