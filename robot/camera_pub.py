@@ -23,9 +23,12 @@ already worked around in uvc_camera_server.py -- do not "fix" these back:
     never reads -- open_camera() probes indices and keeps the first one
     that both opens AND delivers a real frame.
   - Now that a second camera (Insta360) is also on this robot,
-    NAME_FILTER pins probing to this camera's USB product name (seen via
-    `lsusb` as "HSTD USB3.0 Camera") so this process can never accidentally
-    grab the Insta360's /dev/videoN instead (and vice versa) -- without it,
+    NAME_FILTER pins probing to this camera's V4L2 device name (NOT the
+    same string as `lsusb` shows -- `lsusb` reports "HSTD USB3.0 Camera"
+    but V4L2's own /sys/class/video4linux/videoN/name is the more generic
+    "USB3.0 Camera: USB3.0 Camera", confirmed from logs/camera_pub.log's
+    probe lines on 2026-07-09) so this process can never accidentally grab
+    the Insta360's /dev/videoN instead (and vice versa) -- without it,
     whichever process's open_camera() reaches a shared index first would
     silently win it, possibly swapping which stream shows which camera.
 """
@@ -40,7 +43,7 @@ PORT = 8765
 WIDTH = 1920
 HEIGHT = 1200
 JPEG_QUALITY = 60
-NAME_FILTER = "HSTD"
+NAME_FILTER = "USB3.0 Camera"  # confirmed via logs/camera_pub.log's probe lines (2026-07-09) -- lsusb's "HSTD USB3.0 Camera" string is NOT what V4L2 reports
 
 if __name__ == "__main__":
     env_id = os.environ.get("CAMERA_ID")
