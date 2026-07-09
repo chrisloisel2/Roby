@@ -165,6 +165,12 @@ header {
 	border-color: var(--hairline-2);
 }
 
+.icon-btn.active {
+	background: var(--accent);
+	color: #fff;
+	border-color: transparent;
+}
+
 /* ---------- Main grid ---------- */
 main {
 	display: grid;
@@ -312,6 +318,16 @@ main {
 	z-index: 2;
 	padding: 3px 8px;
 	font-size: 10.5px;
+}
+
+.video-pip .pip-detach {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	z-index: 2;
+	width: 22px;
+	height: 22px;
+	font-size: 11px;
 }
 
 .video-pip .noSignal .sub {

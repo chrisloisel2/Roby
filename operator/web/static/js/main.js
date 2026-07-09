@@ -5,6 +5,8 @@
 //   videoMux.js  ws://<robot-ip>:8765 (direct to robot, ONE shared connection for both cameras)
 //   camera.js    front camera (cam_id 0) -> canvas (latest-frame rendering)
 //   camera2.js   second camera (cam_id 1) -> picture-in-picture canvas
+//   popoutCanvas.js  shared "detach to another screen" popup window helper,
+//                used by both camera.js and camera2.js
 //   armLink.js   ws://<robot-ip>:8767 (direct to robot/arm_agent.py) -> raw GELLO lines
 //   status.js    /ws/status -> tiles, banner, arm joint gauges
 //   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control (base/stop/reset/gripper)

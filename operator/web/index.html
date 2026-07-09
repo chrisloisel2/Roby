@@ -42,19 +42,28 @@
 				</div>
 				<div class="video-actions">
 					<button class="icon-btn ghost" id="btnFit" title="Ajustement vidéo (contain / cover)">⤢</button>
+					<button class="icon-btn ghost" id="btnDetach" title="Détacher sur un autre écran">⇱</button>
 					<button class="icon-btn ghost" id="btnFullscreen" title="Plein écran (F)">⛶</button>
 				</div>
 				<div class="rec"><span class="dot"></span>LIVE</div>
 				<div class="video-pip" id="videoPip">
 					<canvas id="cam2" role="img" aria-label="Flux caméra secondaire"></canvas>
 					<span class="chip pip-label"><span>caméra 2</span></span>
+					<button class="icon-btn ghost pip-detach" id="btnDetach2" title="Détacher sur un autre écran">⇱</button>
 					<div class="noSignal show" id="noSignal2">
 						<div class="sub">en attente du flux caméra 2…</div>
+					</div>
+					<div class="noSignal" id="detachedOverlay2">
+						<div class="sub">flux détaché — fenêtre séparée</div>
 					</div>
 				</div>
 				<div class="noSignal show" id="noSignal">
 					<div class="big">AUCUN SIGNAL</div>
 					<div class="sub">en attente du flux caméra du robot…</div>
+				</div>
+				<div class="noSignal" id="detachedOverlay">
+					<div class="big">FLUX DÉTACHÉ</div>
+					<div class="sub">affiché dans une fenêtre séparée — glissez-la sur un second écran</div>
 				</div>
 			</section>
 

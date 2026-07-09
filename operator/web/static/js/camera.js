@@ -18,15 +18,20 @@
 
 import { config } from "./config.js";
 import { CAM_FRONT } from "./videoMux.js";
+import { createPopout, rafOn } from "./popoutCanvas.js";
+import { toast } from "./toast.js";
 
 export function initCamera({ setTile, mux }) {
 	const cam = document.getElementById("cam");
 	const noSignal = document.getElementById("noSignal");
+	const detachedOverlay = document.getElementById("detachedOverlay");
+	const btnDetach = document.getElementById("btnDetach");
 	const chipAge = document.getElementById("chipAge");
 	const fpsEl = document.getElementById("fps");
 	const ageEl = document.getElementById("age");
 	const videoPanel = document.getElementById("videoPanel");
 	const camCtx = cam.getContext("2d");
+	const popout = createPopout({ title: "Roby — Caméra avant" });
 
 	let lastFrame = 0;
 	const frameStamps = [];
@@ -50,19 +55,25 @@ export function initCamera({ setTile, mux }) {
 			// create/revoke bookkeeping an <img> would need.
 			try {
 				const bitmap = await createImageBitmap(new Blob([latestCamData], { type: "image/jpeg" }));
-				if (cam.width !== bitmap.width || cam.height !== bitmap.height) {
-					cam.width = bitmap.width;
-					cam.height = bitmap.height;
+				// Detached: draw into the popup's canvas instead of the tile's
+				// -- still exactly one decode+draw per frame either way, never
+				// both (see popoutCanvas.js for why it's not just mirrored).
+				const detached = popout.isOpen();
+				const targetCanvas = detached ? popout.getCanvas() : cam;
+				const targetCtx = detached ? popout.getCtx() : camCtx;
+				if (targetCanvas.width !== bitmap.width || targetCanvas.height !== bitmap.height) {
+					targetCanvas.width = bitmap.width;
+					targetCanvas.height = bitmap.height;
 				}
-				camCtx.drawImage(bitmap, 0, 0);
+				targetCtx.drawImage(bitmap, 0, 0);
 				bitmap.close();
 			} finally {
 				renderingCam = false;
 			}
 		}
-		requestAnimationFrame(renderCamFrame);
+		rafOn(popout, renderCamFrame);
 	}
-	requestAnimationFrame(renderCamFrame);
+	rafOn(popout, renderCamFrame);
 
 	// ---- Freshness / FPS readouts (client-side clock) ----
 	setInterval(() => {
@@ -84,12 +95,35 @@ export function initCamera({ setTile, mux }) {
 	}, 250);
 
 	// ---- Video fit (contain / cover) ----
-	const applyFit = () => { cam.style.objectFit = config.get("ui.videoFit"); };
+	const applyFit = () => {
+		const fit = config.get("ui.videoFit");
+		cam.style.objectFit = fit;
+		if (popout.isOpen()) popout.getCanvas().style.objectFit = fit;
+	};
 	applyFit();
 	config.subscribe((path) => { if (path === "ui.videoFit") applyFit(); });
 	document.getElementById("btnFit").addEventListener("click", () => {
 		config.set("ui.videoFit", config.get("ui.videoFit") === "contain" ? "cover" : "contain");
 	});
+
+	// ---- Détacher sur un autre écran (popup fenêtre séparée) ----
+	if (btnDetach) {
+		popout.onChange((open) => {
+			btnDetach.classList.toggle("active", open);
+			btnDetach.title = open
+				? "Réattacher le flux à cette page"
+				: "Détacher sur un autre écran";
+			if (detachedOverlay) detachedOverlay.classList.toggle("show", open);
+			applyFit(); // le popup vient d'apparaître avec son canvas encore à object-fit par défaut
+		});
+		btnDetach.addEventListener("click", () => {
+			const wasOpen = popout.isOpen();
+			popout.toggle();
+			if (!wasOpen && !popout.isOpen()) {
+				toast("Fenêtre bloquée par le navigateur — autorisez les popups pour ce site.", "warning");
+			}
+		});
+	}
 
 	// ---- Fullscreen ----
 	const toggleFullscreen = () => {
