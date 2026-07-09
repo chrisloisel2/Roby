@@ -7,8 +7,9 @@
 # Opt-out flags, for when a CAN adapter is unplugged/misbehaving and you
 # still want the rest of the stack up rather than being blocked entirely by
 # the fail-fast checks below:
-#     NO_ARM=1      OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # base + caméras, pas de bras
-#     NO_BASE=1     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # bras + caméras, pas de base (ex: base CAN en panne, tu veux quand même tester le bras)
+#     NO_ARM=1      OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # base + caméras + mât, pas de bras
+#     NO_BASE=1     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # bras + caméras + mât, pas de base (ex: base CAN en panne, tu veux quand même tester le bras)
+#     NO_MAST=1     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # base + bras + caméras, pas de mât (ex: bridge Arduino du mât débranché)
 #     CAMERA_ONLY=1 scripts/start_robot.sh                              # caméras seules (pas d'OPERATOR_IP requis : camera_pub.py ne parle pas Zenoh)
 #
 # camera_pub.py always runs regardless of these flags, same as before --
@@ -45,11 +46,14 @@ cd "$(dirname "$0")/.."
 CAMERA_ONLY="${CAMERA_ONLY:-0}"
 NO_ARM="${NO_ARM:-0}"
 NO_BASE="${NO_BASE:-0}"
+NO_MAST="${NO_MAST:-0}"
 RUN_BASE=1
 RUN_ARM=1
+RUN_MAST=1
 if [ "$CAMERA_ONLY" = "1" ]; then
     RUN_BASE=0
     RUN_ARM=0
+    RUN_MAST=0
 fi
 if [ "$NO_ARM" = "1" ]; then
     RUN_ARM=0
@@ -57,8 +61,11 @@ fi
 if [ "$NO_BASE" = "1" ]; then
     RUN_BASE=0
 fi
+if [ "$NO_MAST" = "1" ]; then
+    RUN_MAST=0
+fi
 
-if { [ "$RUN_BASE" = "1" ] || [ "$RUN_ARM" = "1" ]; } && [ -z "${OPERATOR_IP:-}" ]; then
+if { [ "$RUN_BASE" = "1" ] || [ "$RUN_ARM" = "1" ] || [ "$RUN_MAST" = "1" ]; } && [ -z "${OPERATOR_IP:-}" ]; then
     echo "start_robot.sh: OPERATOR_IP est requis (base et/ou bras activés), ex:" >&2
     echo "    OPERATOR_IP=192.168.15.111 scripts/start_robot.sh" >&2
     echo "  IP actuelle du PC opérateur : \`ipconfig getifaddr en0\` sur le Mac." >&2
@@ -70,6 +77,7 @@ mkdir -p logs
 AGENT_LOG="logs/robot_agent.log"
 CAMERA_LOG="logs/camera_pub.log"
 ARM_LOG="logs/arm_agent.log"
+MAST_LOG="logs/mast_serial_bridge.log"
 
 # Always use the dedicated .venv (created with --system-site-packages, see
 # README) if present, NEVER the bare `python` from whatever shell/conda env
@@ -126,8 +134,9 @@ stop_running() {
 stop_running "robot/robot_agent.py"
 stop_running "robot/camera_pub.py"
 stop_running "robot/arm_agent.py"
+stop_running "robot/mast_serial_bridge.py"
 
-echo "start_robot.sh: RUN_BASE=$RUN_BASE RUN_ARM=$RUN_ARM -- logs dans logs/*.log" >&2
+echo "start_robot.sh: RUN_BASE=$RUN_BASE RUN_ARM=$RUN_ARM RUN_MAST=$RUN_MAST -- logs dans logs/*.log" >&2
 
 # PIDs of whatever this run actually starts, so the EXIT trap and the final
 # wait only ever reference processes that exist -- no matter which subset of
@@ -216,6 +225,29 @@ if [ "$RUN_ARM" = "1" ]; then
     echo "start_robot.sh: arm_agent.py démarré (pid $ARM_PID)." >&2
 else
     echo "start_robot.sh: bras sauté (RUN_ARM=0)." >&2
+fi
+
+if [ "$RUN_MAST" = "1" ]; then
+    # mast_serial_bridge.py only needs pyserial + eclipse-zenoh (already in
+    # the shared .venv, see requirements.txt) -- runs under $PY, no separate
+    # conda env like the arm. It retries the serial port internally (no
+    # crash if the Arduino isn't plugged in yet), so this fail-fast check
+    # only really catches Zenoh/config failures, not missing hardware.
+    OPERATOR_IP="$OPERATOR_IP" "$PY" -u robot/mast_serial_bridge.py > "$MAST_LOG" 2>&1 &
+    MAST_PID=$!
+    PIDS+=("$MAST_PID")
+
+    sleep 2
+    if ! kill -0 "$MAST_PID" 2>/dev/null; then
+        echo "start_robot.sh: mast_serial_bridge.py s'est arrêté immédiatement -- ABANDON." >&2
+        echo "  --- $MAST_LOG ---" >&2
+        cat "$MAST_LOG" >&2
+        echo "  (NO_MAST=1 pour continuer sans le mât)" >&2
+        exit 1
+    fi
+    echo "start_robot.sh: mast_serial_bridge.py démarré (pid $MAST_PID)." >&2
+else
+    echo "start_robot.sh: mât sauté (RUN_MAST=0)." >&2
 fi
 
 # Block here so Ctrl-C (SIGINT) reaches this script and runs the EXIT trap

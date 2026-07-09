@@ -1,19 +1,23 @@
 # Shared dependencies for both PCs.
 # The operator PC needs all of them: pip install -r requirements.txt
 #
-# The ROBOT PC only strictly needs eclipse-zenoh, dmcan_sdk, pyusb and
-# websockets (+ opencv-python if it has no working system OpenCV already).
-# websockets is for camera_pub.py's own WebSocket server (it serves video
-# straight to the browser, ws://<robot-ip>:8765 -- not over Zenoh). DO NOT
-# blindly `pip install -r requirements.txt` for a venv on the robot: the
-# generic opencv-python PyPI wheel is built WITHOUT GStreamer and its V4L2
-# backend has failed outright ("can't open camera by index") on at least one
-# UVC camera we use, while the apt-installed system OpenCV (GStreamer-enabled)
-# opens the same camera fine. On the robot, create the venv with
-# --system-site-packages and only install what's actually missing so it
-# inherits the working system cv2 instead of shadowing it with a broken one:
+# The ROBOT PC only strictly needs eclipse-zenoh, dmcan_sdk, pyusb,
+# websockets and pyserial (+ opencv-python if it has no working system
+# OpenCV already). websockets is for camera_pub.py's own WebSocket server
+# (it serves video straight to the browser, ws://<robot-ip>:8765 -- not
+# over Zenoh). pyserial is for robot/mast_serial_bridge.py (Arduino mast
+# bridge, see that module's docstring) -- the comment on the pyserial line
+# below predates that script and originally only covered the operator PC's
+# GELLO reader. DO NOT blindly `pip install -r requirements.txt` for a venv
+# on the robot: the generic opencv-python PyPI wheel is built WITHOUT
+# GStreamer and its V4L2 backend has failed outright ("can't open camera by
+# index") on at least one UVC camera we use, while the apt-installed system
+# OpenCV (GStreamer-enabled) opens the same camera fine. On the robot,
+# create the venv with --system-site-packages and only install what's
+# actually missing so it inherits the working system cv2 instead of
+# shadowing it with a broken one:
 #     python3 -m venv --system-site-packages .venv
-#     .venv/bin/pip install eclipse-zenoh dmcan_sdk pyusb websockets
+#     .venv/bin/pip install eclipse-zenoh dmcan_sdk pyusb websockets pyserial
 #
 # robot/damiao.py and robot/dlls/libdm_device.so are vendored in this repo
 # (not on PyPI): a modified copy of the DAMIAO vendor SDK with the DMS2325
@@ -26,4 +30,5 @@ fastapi>=0.110.0
 uvicorn>=0.29.0
 websockets>=12.0
 pygame>=2.5.0
-pyserial>=3.5  # GELLO leader arm reader (operator PC only, see operator/gello_reader.py)
+pyserial>=3.5  # GELLO leader arm reader (operator PC, operator/gello_reader.py) AND
+               # the mast Arduino bridge (robot PC, robot/mast_serial_bridge.py)

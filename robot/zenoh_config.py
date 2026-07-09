@@ -1,7 +1,8 @@
 """Shared Zenoh client config loader for the robot-PC processes
-(robot_agent.py, arm_agent.py). camera_pub.py does NOT use Zenoh -- it
-serves video straight to the browser over its own WebSocket server instead
-(ws://<robot-ip>:8765, see camera_pub.py's module docstring).
+(robot_agent.py, arm_agent.py, mast_serial_bridge.py). camera_pub.py does
+NOT use Zenoh -- it serves video straight to the browser over its own
+WebSocket server instead (ws://<robot-ip>:8765, see camera_pub.py's module
+docstring).
 
 Single source of truth for "which operator IP do we connect to". This used
 to be reimplemented three times, out of sync: camera_pub.py had its own

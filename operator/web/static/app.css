@@ -739,6 +739,34 @@ main {
 	opacity: .75;
 }
 
+.mast-pad {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 7px;
+}
+
+.mast-pad button {
+	appearance: none;
+	border: 1px solid var(--hairline);
+	background: var(--surface-2);
+	color: var(--ink-2);
+	border-radius: 10px;
+	height: 42px;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	user-select: none;
+	touch-action: none;
+	transition: all .06s;
+}
+
+.mast-pad button:active,
+.mast-pad button.on {
+	background: var(--accent);
+	color: #fff;
+	border-color: transparent;
+}
+
 .row {
 	display: grid;
 	gap: 6px;

@@ -15,6 +15,13 @@ const KEYMAP = {
 	ArrowUp: "fwd", ArrowDown: "back", ArrowLeft: "rotL", ArrowRight: "rotR",
 };
 
+// Mast (robot/mast_serial_bridge.py <-> Arduino, see firmware/mast/README.md):
+// continuous jog speed sent on robot/mast/cmd while Monter/Descendre (or
+// PgUp/PgDn) is held. The firmware clamps to its own VEL_MAX_MM_S anyway;
+// this is just a comfortable default, not a UI-exposed setting (unlike the
+// base's speed slider) -- keep it simple until there's a reason not to.
+const MAST_SPEED_MM_S = 30;
+
 export function initControl({ onFullscreen }) {
 	const $ = (id) => document.getElementById(id);
 	const ctrlSock = createSocket("/ws/control");
@@ -50,6 +57,33 @@ export function initControl({ onFullscreen }) {
 	}
 	$("grip").addEventListener("input", (e) => setGripper(e.target.value / 100));
 
+	// ---- Mast (up/down) ----
+	// Gated by the SAME deadman as the base (unlike the arm, which needs both
+	// hands and is deliberately independent -- see arm_agent.py's docstring):
+	// the mast is a vertical actuator, "hold deadman + hold direction" mirrors
+	// the base's own dpad exactly. Sent as a continuous VEL command while
+	// held (mast_serial_bridge.py's firmware watchdog stops it after 300ms of
+	// silence, see firmware/mast/README.md §5), plus one explicit mm_s:0 the
+	// instant it's released -- not spammed at idle: an idle VEL:0 is a no-op
+	// on the firmware (still ACKed over serial/Zenoh for nothing), and this
+	// matches the reference client's own jog() semantics in that doc.
+	const mastBtn = { up: $("mastUp"), down: $("mastDown") };
+	const mast = { up: 0, down: 0 };
+	const setMastDir = (dir, on) => {
+		mast[dir] = on ? 1 : 0;
+		mastBtn[dir].classList.toggle("on", on);
+	};
+	for (const dir of ["up", "down"]) {
+		const btn = mastBtn[dir];
+		const down = (e) => { e.preventDefault(); setMastDir(dir, true); };
+		const up = () => setMastDir(dir, false);
+		btn.addEventListener("pointerdown", down);
+		btn.addEventListener("pointerup", up);
+		btn.addEventListener("pointerleave", up);
+		btn.addEventListener("pointercancel", up);
+	}
+	let mastMmSPrev = 0;
+
 	// ---- Deadman ----
 	const dm = $("deadman");
 	const setDeadman = (v) => {
@@ -76,7 +110,7 @@ export function initControl({ onFullscreen }) {
 	const modalOpen = () => document.querySelector(".modal-overlay:not([hidden])");
 	const isTextEntry = (el) => el.closest?.("select, textarea, input[type=text], input[type=number]");
 
-	const GAME_KEYS = new Set(["Space", "KeyX", "KeyR", "KeyF"]);
+	const GAME_KEYS = new Set(["Space", "KeyX", "KeyR", "KeyF", "PageUp", "PageDown"]);
 	const isGameKey = (code) => GAME_KEYS.has(code) || code in KEYMAP;
 
 	const highlight = (k, on) =>
@@ -102,16 +136,22 @@ export function initControl({ onFullscreen }) {
 		if (ev.code === "KeyX") { triggerStop(); return; }
 		if (ev.code === "KeyR") { sendReset(); return; }
 		if (ev.code === "KeyF") { onFullscreen && onFullscreen(); return; }
+		if (ev.code === "PageUp") { ev.preventDefault(); setMastDir("up", true); return; }
+		if (ev.code === "PageDown") { ev.preventDefault(); setMastDir("down", true); return; }
 		if (KEYMAP[ev.code]) { ev.preventDefault(); keys[KEYMAP[ev.code]] = 1; highlight(KEYMAP[ev.code], true); }
 	});
 	document.addEventListener("keyup", (ev) => {
 		if (ev.code === "Space") { setDeadman(false); return; }
+		if (ev.code === "PageUp") { setMastDir("up", false); return; }
+		if (ev.code === "PageDown") { setMastDir("down", false); return; }
 		if (KEYMAP[ev.code]) { keys[KEYMAP[ev.code]] = 0; highlight(KEYMAP[ev.code], false); }
 	});
 	// Release everything if the tab loses focus (safety).
 	window.addEventListener("blur", () => {
 		for (const k in keys) keys[k] = 0;
 		setDeadman(false);
+		setMastDir("up", false);
+		setMastDir("down", false);
 		document.querySelectorAll(".dpad button").forEach(b => b.classList.remove("on"));
 	});
 
@@ -149,6 +189,8 @@ export function initControl({ onFullscreen }) {
 			// as the most-recent one at the robot for CMD_TIMEOUT_SEC.
 			ctrlSock.send({ type: "deadman", value: false });
 			ctrlSock.send({ type: "base", vx: 0, vy: 0, wz: 0 });
+			ctrlSock.send({ type: "mast", action: "velocity", mm_s: 0 });
+			mastMmSPrev = 0;
 			toast("Pilotage navigateur désactivé");
 		} else {
 			toast("Pilotage navigateur activé — homme-mort requis pour bouger", "warning");
@@ -200,6 +242,20 @@ export function initControl({ onFullscreen }) {
 			}
 			dm.classList.toggle("armed", activeDeadman);
 			setTile("t-dead", activeDeadman ? "good" : "warning", activeDeadman ? "ARMÉ" : "RELÂCHÉ");
+
+			// Mast: send while actively held (>=1 tick/rateHz, well under the
+			// firmware's 300ms VEL watchdog), plus exactly one more frame at
+			// mm_s:0 the instant it's released -- see the button wiring above
+			// for why this doesn't just resend 0 forever like the base does.
+			let mastMmS = 0;
+			if (activeDeadman) {
+				if (mast.up) mastMmS = MAST_SPEED_MM_S;
+				else if (mast.down) mastMmS = -MAST_SPEED_MM_S;
+			}
+			if (browserControlEnabled && (mastMmS !== 0 || mastMmSPrev !== 0)) {
+				ctrlSock.send({ type: "mast", action: "velocity", mm_s: mastMmS });
+			}
+			mastMmSPrev = mastMmS;
 
 			// GELLO/arm: NOT handled here anymore -- gello.js relays raw serial
 			// lines to arm_agent.py directly from its own read loop (as fast as

@@ -101,6 +101,10 @@
 							<div class="k">Bras</div>
 							<div class="v"><span class="ic"></span><span>—</span></div>
 						</div>
+						<div class="tile wide" id="t-mast" data-s="warning">
+							<div class="k">Mât</div>
+							<div class="v"><span class="ic"></span><span>—</span></div>
+						</div>
 					</div>
 					<div class="reason" id="reasonLine"></div>
 					<div class="arm-joints" id="armJoints"></div>
@@ -136,10 +140,18 @@
 							<label>Pince <b id="gripVal">ouverte</b></label>
 							<input type="range" id="grip" min="0" max="100" value="0">
 						</div>
+						<div class="row">
+							<label>Mât</label>
+							<div class="mast-pad">
+								<button id="mastUp" title="Monter (maintenir) — PgUp">▲ Monter</button>
+								<button id="mastDown" title="Descendre (maintenir) — PgDn">▼ Descendre</button>
+							</div>
+						</div>
 						<div class="hints">
 							positions <b>WASD / ZQSD</b> (physiques, indépendantes du layout clavier) ·
 							<span class="kbd">Espace</span> deadman switch · <span class="kbd">X</span> arrêt ·
-							<span class="kbd">R</span> réarmer · <span class="kbd">?</span> aide
+							<span class="kbd">R</span> réarmer · <span class="kbd">PgUp/PgDn</span> mât ·
+							<span class="kbd">?</span> aide
 						</div>
 					</div>
 				</section>
@@ -361,6 +373,10 @@
 					<tr>
 						<td><span class="kbd">↑↓←→</span></td>
 						<td>avant / arrière / rotation</td>
+					</tr>
+					<tr>
+						<td><span class="kbd">PgUp</span> / <span class="kbd">PgDn</span></td>
+						<td>monter / descendre le mât (maintenir)</td>
 					</tr>
 					<tr>
 						<td><span class="kbd">X</span></td>

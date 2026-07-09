@@ -85,6 +85,21 @@ export function initStatus() {
 				!armState.connected ? "critical" : (armEstop ? "critical" : (armState.moving ? "good" : "warning")),
 				!armState.connected ? "DÉCONNECTÉ" : (armEstop ? "E-STOP" : (armState.moving ? "EN MOUVEMENT" : "INACTIF")));
 			renderJoints(armState.joints || {});
+
+			// mast state schema published by robot/mast_serial_bridge.py, relayed
+			// as-is by web_server.py (see that module's on_mast_state/on_mast_link):
+			//   {linked, position_mm, fdc_min, fdc_max, t}
+			// "linked" always reflects robot/mast/link, even once position_mm etc.
+			// have gone stale -- see web_server.py's status_ws for why.
+			const mastState = s.mast || {};
+			const mastLinked = !!mastState.linked;
+			const mastAtLimit = !!(mastState.fdc_min || mastState.fdc_max);
+			const mastPos = mastState.position_mm;
+			setTile("t-mast",
+				!mastLinked ? "critical" : (mastAtLimit ? "warning" : "good"),
+				!mastLinked ? "DÉCONNECTÉ" : (
+					(mastPos != null ? `${mastPos.toFixed(0)} mm` : "en attente")
+					+ (mastAtLimit ? " · FDC" : "")));
 		},
 	});
 

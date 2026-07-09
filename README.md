@@ -1,20 +1,21 @@
 # Roby
 
-Téléopération d'un robot (base mobile + bras) via **Zenoh**, avec joystick,
-GELLO, caméra et interface web. Deux PC : opérateur et robot.
+Téléopération d'un robot (base mobile + bras + mât) via **Zenoh**, avec
+joystick, GELLO, caméra et interface web. Deux PC : opérateur et robot.
 
 ```text
 [Joystick + GELLO]
         v
 [PC opérateur]  input_agent.py · web_server.py · zenohd
-        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (N caméras, 1 connexion, port 8765)
+        |  Zenoh TCP (base/bras/mât/état)  ^  WebSocket direct (N caméras, 1 connexion, port 8765)
         v                                  |
-[PC robot]      robot_agent.py (base) · arm_agent.py (bras) · camera_pub.py
+[PC robot]      robot_agent.py (base) · arm_agent.py (bras) ·
+                mast_serial_bridge.py (mât) · camera_pub.py
         v
-[Robot + bras + N caméras USB, découvertes automatiquement]
+[Robot + bras + mât + N caméras USB, découvertes automatiquement]
 ```
 
-Seuls base/bras/état passent par Zenoh + web_server.py. TOUTES les caméras
+Seuls base/bras/mât/état passent par Zenoh + web_server.py. TOUTES les caméras
 détectées sont servies par `camera_pub.py` sur une seule **connexion
 WebSocket directe** navigateur <-> robot (pas de hop Zenoh ni
 web_server.py sur ce chemin) — voir [Structure](#structure) et la table
@@ -30,9 +31,12 @@ résolution) -- **Réglages (⚙) > Caméras** dans la page opérateur laisse
 choisir laquelle est affichée en grand cadre et laquelle en vignette (voir
 § Robot réel plus bas pour le détail de la découverte côté robot).
 
-`robot_agent.py` (base) et `arm_agent.py` (bras) sont deux process **séparés**
-sur le PC robot, avec chacun son propre watchdog de sécurité local — voir
-[Sécurité](#sécurité) et [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower).
+`robot_agent.py` (base), `arm_agent.py` (bras) et `mast_serial_bridge.py`
+(mât) sont trois process **séparés** sur le PC robot, chacun avec son propre
+watchdog de sécurité local (celui du mât vit sur le firmware Arduino
+lui-même) — voir [Sécurité](#sécurité), [Bras GELLO -> reBot
+B601](#bras-gello--rebot-b601-leader-follower) et [Mât (chariot
+pas-à-pas)](#mât-chariot-pas-à-pas).
 
 ## Structure
 
@@ -56,11 +60,14 @@ operator/
 robot/
   robot_agent.py         base mecanum : applique les commandes + watchdog LOCAL
   arm_agent.py            bras B601 : commandes en WebSocket direct (port 8767, PAS Zenoh), process séparé (env conda lerobot)
+  mast_serial_bridge.py   mât (chariot pas-à-pas) : pont série Arduino <-> Zenoh (robot/mast/cmd|state|event|link)
   uvc_camera_server.py    capture caméra générique + serveur WebSocket multi-caméras
   camera_pub.py           config des 2 caméras -> JPEG -> WebSocket direct navigateur (port 8765, PAS Zenoh)
+firmware/
+  mast/                  firmware Arduino (PlatformIO) du chariot du mât -- voir firmware/mast/README.md
 scripts/
   start_operator.sh      lance zenohd + web_server + input_agent
-  start_robot.sh         lance robot_agent + camera_pub (+ arm_agent)
+  start_robot.sh         lance robot_agent + camera_pub + mast_serial_bridge.py (+ arm_agent)
   start_arm.sh            lance arm_agent (séparé, voir plus bas)
 ```
 
@@ -80,11 +87,11 @@ V4L2 a échoué purement et simplement sur au moins une caméra USB utilisée
 ici (`can't open camera by index`), alors que l'OpenCV système (apt,
 GStreamer) ouvre la même caméra sans problème. Créer le venv avec
 `--system-site-packages` pour hériter du cv2 système et n'installer que
-`eclipse-zenoh` par-dessus :
+`eclipse-zenoh` (+ `pyserial` pour `mast_serial_bridge.py`) par-dessus :
 
 ```bash
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install eclipse-zenoh
+.venv/bin/pip install eclipse-zenoh pyserial
 ```
 
 ## Configuration réseau
@@ -122,8 +129,9 @@ d'être bloqué par les vérifications fail-fast. `camera_pub.py` tourne dans
 tous les cas, y compris ces modes (pas besoin d'OPERATOR_IP) :
 
 ```bash
-NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra(s), pas de bras
-NO_BASE=1     OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # bras + caméra(s), pas de base (ex: CAN de la base en panne, tester le bras seul)
+NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra(s) + mât, pas de bras
+NO_BASE=1     OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # bras + caméra(s) + mât, pas de base (ex: CAN de la base en panne, tester le bras seul)
+NO_MAST=1     OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + bras + caméra(s), pas de mât (ex: bridge Arduino débranché)
 CAMERA_ONLY=1 scripts/start_robot.sh                              # caméra(s) seules (pas d'OPERATOR_IP requis)
 ```
 
@@ -415,6 +423,49 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 > N'utiliser **qu'une seule source de commande à la fois** : l'interface web *ou*
 > `input_agent.py` (joystick) — les deux publient sur les mêmes topics.
 
+## Mât (chariot pas-à-pas)
+
+Chariot vertical sur vis sans fin, motorisé par un moteur pas-à-pas NEMA23
+boucle fermée (driver CL57T, frein électromagnétique 24 V, fins de course
+haut/bas), piloté par un firmware Arduino dédié (`firmware/mast/`,
+PlatformIO) relié en série au PC robot.
+
+```text
+[navigateur]  bouton Monter/Descendre (maintenu) ou touches PgUp/PgDn
+      |  /ws/control -> web_server.py -> Zenoh (robot/mast/cmd)
+      v
+[PC robot]  robot/mast_serial_bridge.py  --série 115200 bauds-->  [Arduino, firmware/mast/]
+      ^  robot/mast/state (position_mm, fdc_min/max) + robot/mast/link
+      |
+[navigateur]  tuile "Mât" (/ws/status)
+```
+
+`mast_serial_bridge.py` est un process robot **séparé** de plus (comme
+`arm_agent.py`), lancé par `scripts/start_robot.sh` (flag `NO_MAST=1` pour
+l'exclure) — même contrat `OPERATOR_IP` que `robot_agent.py`/`arm_agent.py`
+(voir `robot/zenoh_config.py`). Il traduit les commandes JSON de
+`robot/mast/cmd` en lignes série pour le firmware et republie sa télémétrie
+sur `robot/mast/state`/`robot/mast/link` (relayées par `web_server.py` vers
+la tuile "Mât" de la page) ; `robot/mast/event` (acquittements bruts du
+firmware) reste un flux de debug CLI, pas relayé au navigateur.
+
+Le front envoie une commande `{"action":"velocity","mm_s":±30}` en continu
+(≥10 Hz, à la fréquence de `control.rateHz`) tant que le bouton Monter/
+Descendre (ou `PgUp`/`PgDn`) est maintenu **et** que le homme-mort est actif
+— **le même homme-mort que la base**, contrairement au bras (qui en est
+volontairement indépendant, voir plus haut) : le mât est un actionneur
+vertical, la sémantique "maintenir le homme-mort + maintenir la direction"
+reproduit exactement le pavé directionnel de la base. Un `mm_s:0` explicite
+est envoyé une seule fois au relâchement (pas de réémission continue à
+l'arrêt, contrairement à `vx`/`vy`/`wz`). Le firmware a son propre watchdog
+homme-mort (300 ms sans nouveau `VEL:` → arrêt + frein serré), **indépendant**
+de celui de `robot_agent.py` : le mât s'arrête tout seul même si
+`web_server.py`/`robot_agent.py` sont down, tant que le lien série
+Arduino ↔ PC robot tient.
+
+Protocole complet (position absolue, homing, jog, frein, fins de course,
+dépannage) : voir `firmware/mast/README.md`.
+
 ## Topics Zenoh
 
 | Clé                          | Sens | Contenu                                   |
@@ -426,6 +477,10 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 | `robot/heartbeat`            | <-   | vivacité robot base (~5 Hz)               |
 | `robot/state`                | <-   | `{moving, estop, deadman_ok, fresh_cmd, ts}` (base) |
 | `robot/arm/state`            | <-   | `{connected, moving, fresh_cmd, estop, joints, ts}` (bras) |
+| `robot/mast/cmd`             | ->   | commande JSON mât, ex. `{"action":"velocity","mm_s":30}` — voir `firmware/mast/README.md` |
+| `robot/mast/state`           | <-   | `{"position_mm","fdc_min","fdc_max","t"}` (mât, ~60 Hz) |
+| `robot/mast/link`            | <-   | `"Connected"` / `"Disconnected"` (liaison série Arduino du mât) |
+| `robot/mast/event`           | <-   | acquittements firmware mât (`ACK`/`MSG:`/`WARN:`/`ERR:`) — debug CLI, pas relayé au navigateur |
 
 Les caméras ne sont **pas** des topics Zenoh : `camera_pub.py` sert le JPEG
 des deux caméras directement au navigateur sur une seule connexion
@@ -464,6 +519,14 @@ le matériel réel) exactement, et celui-ci n'en a pas non plus. Seul
 (`disable_torque()`, edge-triggered) ; `robot/cmd/reset` le réarme
 (`configure()`). Détails : [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower).
 
+Le mât, lui, a son watchdog homme-mort **sur le firmware Arduino
+lui-même** (300 ms sans nouveau `VEL:` reçu en série -> arrêt + frein serré),
+indépendant du watchdog de `robot_agent.py` : il s'arrête tout seul même si
+`web_server.py`/`robot_agent.py` sont down, tant que la liaison série
+Arduino ↔ PC robot est vivante. `robot/cmd/stop` (E-stop partagé base/bras)
+**ne coupe pas** le mât — voir [Mât (chariot pas-à-pas)](#mât-chariot-pas-à-pas)
+et `firmware/mast/README.md` §5 pour le détail.
+
 ## Notes / limites
 
 - `apply_arm_command`/`apply_gripper_command` dans `robot_agent.py` restent
@@ -486,3 +549,4 @@ le matériel réel) exactement, et celui-ci n'en a pas non plus. Seul
 5. Serveur web + affichage caméra
 6. ~~GELLO -> `robot/cmd/arm`~~ fait — voir [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower)
 7. Limites de vitesse + deadman + arrêt d'urgence
+8. ~~Mât (chariot pas-à-pas) -> `robot/mast/cmd`~~ fait — voir [Mât (chariot pas-à-pas)](#mât-chariot-pas-à-pas)
