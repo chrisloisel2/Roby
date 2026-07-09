@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Test mât — chariot</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171c22; --panel2:#1e252d; --line:#2a333d;
+    --txt:#e6edf3; --muted:#8b98a5; --accent:#4aa3ff; --ok:#3fb950;
+    --warn:#d29922; --err:#f85149; --stop:#e5484d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--txt); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    padding:16px; max-width:760px; margin:0 auto; -webkit-tap-highlight-color:transparent;
+  }
+  h1{font-size:18px; margin:0; font-weight:600}
+  .top{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px}
+  .links{display:flex; gap:8px; flex-wrap:wrap}
+  .pill{display:inline-flex; align-items:center; gap:6px; background:var(--panel);
+    border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:12px; color:var(--muted)}
+  .dot{width:9px; height:9px; border-radius:50%; background:var(--muted); flex:none}
+  .dot.ok{background:var(--ok)} .dot.bad{background:var(--err)} .dot.warn{background:var(--warn)}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px}
+  .banner{border-radius:12px; padding:10px 14px; font-size:14px; margin-bottom:14px; border:1px solid var(--line)}
+  .banner.need{background:rgba(210,153,34,.12); border-color:var(--warn); color:#f2cc60}
+  .banner.busy{background:rgba(74,163,255,.12); border-color:var(--accent); color:#9dc9ff}
+  .banner.ok{background:rgba(63,185,80,.12); border-color:var(--ok); color:#7ee787}
+  .banner.err{background:rgba(248,81,73,.12); border-color:var(--err); color:#ff8b82}
+
+  .readout{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap}
+  .big{font-size:46px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-1px}
+  .unit{font-size:16px; color:var(--muted)}
+  .sub{color:var(--muted); font-size:13px; margin-left:auto; text-align:right}
+
+  .track{position:relative; height:8px; border-radius:6px; background:var(--panel2); margin:14px 0 4px; overflow:hidden}
+  .fill{position:absolute; left:0; top:0; bottom:0; width:0%; background:var(--accent); transition:width .12s linear}
+  .scale{display:flex; justify-content:space-between; color:var(--muted); font-size:12px}
+
+  .setrow{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:6px}
+  .setlbl{color:var(--muted); font-size:13px}
+  .setval{font-size:22px; font-weight:600; font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%; height:38px; accent-color:var(--accent); cursor:pointer}
+  input[type=range]:disabled{opacity:.4; cursor:not-allowed}
+  .opt{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; margin-top:8px}
+  .opt input{width:16px; height:16px; accent-color:var(--accent)}
+
+  .btns{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  button{font:inherit; font-weight:600; border-radius:12px; border:1px solid var(--line);
+    padding:16px; color:var(--txt); background:var(--panel2); cursor:pointer; touch-action:manipulation}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.45; cursor:not-allowed}
+  .home{background:#1c2b3a; border-color:#2f5478}
+  .stop{grid-column:1 / -1; background:var(--stop); border-color:#c93b3f; color:#fff; font-size:20px; padding:22px; letter-spacing:.5px}
+
+  .fdc{display:flex; gap:10px; margin-top:12px}
+  .fdc .pill{font-size:12px}
+  .fdc .dot.hit{background:var(--err)}
+
+  .logwrap{margin-top:2px}
+  .logtitle{color:var(--muted); font-size:12px; margin:0 0 6px; display:flex; justify-content:space-between}
+  #log{background:#0b0e11; border:1px solid var(--line); border-radius:10px; height:150px; overflow:auto;
+    padding:8px 10px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:#c9d1d9}
+  #log div{white-space:pre-wrap; word-break:break-word}
+  .l-ack{color:#6e7681} .l-msg{color:#79c0ff} .l-warn{color:#e3b341} .l-err{color:#ff8b82}
+  .hint{color:var(--muted); font-size:12px; margin-top:10px}
+  kbd{background:var(--panel2); border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:1px 5px; font-size:11px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>Test mât — chariot</h1>
+    <div class="links">
+      <span class="pill"><span class="dot" id="srvDot"></span><span id="srvTxt">serveur…</span></span>
+      <span class="pill"><span class="dot" id="linkDot"></span><span id="linkTxt">série…</span></span>
+    </div>
+  </div>
+
+  <div class="banner need" id="banner">Homing requis — le maximum du mât n'est pas encore connu.</div>
+
+  <div class="panel">
+    <div class="readout">
+      <span class="big" id="posVal">—</span><span class="unit">mm</span>
+      <span class="sub">course : <b id="maxVal">?</b> mm &nbsp;·&nbsp; <b id="pctVal">—</b> %</span>
+    </div>
+    <div class="track"><div class="fill" id="actualBar"></div></div>
+    <div class="scale"><span>0</span><span id="scaleMax">max</span></div>
+    <div class="fdc">
+      <span class="pill"><span class="dot" id="fdcMin"></span>FDC bas</span>
+      <span class="pill"><span class="dot" id="fdcMax"></span>FDC haut</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="setrow">
+      <span class="setlbl">Consigne de position</span>
+      <span class="setval"><span id="setMm">—</span> mm &nbsp;·&nbsp; <span id="setPct">—</span> %</span>
+    </div>
+    <input type="range" id="slider" min="0" max="100" step="0.5" value="0" disabled>
+    <label class="opt"><input type="checkbox" id="liveFollow" checked>Suivi continu pendant le glissement (sinon : envoi au relâchement)</label>
+  </div>
+
+  <div class="btns">
+    <button class="home" id="btnHome">⌂ Homing</button>
+    <button id="btnHomeStop" disabled>Stop homing</button>
+    <button class="stop" id="btnStop">■ ARRÊT D'URGENCE</button>
+  </div>
+
+  <div class="panel logwrap">
+    <p class="logtitle"><span>Journal firmware</span><span id="logClear" style="cursor:pointer">vider</span></p>
+    <div id="log"></div>
+    <p class="hint"><kbd>Échap</kbd> = arrêt d'urgence. La consigne n'est active qu'après un homing réussi.</p>
+  </div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const SEND_THROTTLE_MS = 140;
+
+let maxMm = null;          // course calibrée (mm) ; null tant que non homé
+let calibrated = false;
+let homing = false;
+let dragging = false;
+let lastActual = 0;
+let lastSendTs = 0;
+
+// ---- Envoi de commandes (POST /cmd, payload passthrough vers le bridge) ----
+function post(payload){
+  fetch("/cmd", {method:"POST", headers:{"Content-Type":"text/plain"}, body:payload})
+    .then(r => { if(!r.ok) r.text().then(t => logLine("ERR:WEB,"+r.status+","+t)); })
+    .catch(e => logLine("ERR:WEB,"+e));
+}
+const sendPos = mm => post(JSON.stringify({action:"position", mm:+(+mm).toFixed(2)}));
+const doStop  = () => post(JSON.stringify({action:"stop"}));
+function doHome(){
+  homing = true;
+  setSliderEnabled(false);
+  $("btnHome").disabled = true;
+  $("btnHomeStop").disabled = false;
+  setBanner("busy", "Homing en cours…");
+  post(JSON.stringify({action:"home"}));
+}
+
+// ---- Barre de consigne ----
+function setSliderEnabled(on){ $("slider").disabled = !on; }
+function updateSetLabel(mm){
+  $("setMm").textContent = (+mm).toFixed(1);
+  $("setPct").textContent = maxMm ? Math.round(mm/maxMm*100) : "—";
+}
+$("slider").addEventListener("input", () => {
+  if(!calibrated) return;
+  dragging = true;
+  const v = parseFloat($("slider").value);
+  updateSetLabel(v);
+  if($("liveFollow").checked){
+    const now = performance.now();
+    if(now - lastSendTs >= SEND_THROTTLE_MS){ lastSendTs = now; sendPos(v); }
+  }
+});
+function releaseSlider(){
+  if(!calibrated || !dragging) { dragging = false; return; }
+  dragging = false;
+  const v = parseFloat($("slider").value);
+  updateSetLabel(v);
+  sendPos(v);                       // envoi final exact
+}
+$("slider").addEventListener("change", releaseSlider);
+["pointerup","touchend","mouseup"].forEach(e => $("slider").addEventListener(e, releaseSlider));
+
+// ---- Boutons ----
+$("btnHome").addEventListener("click", doHome);
+$("btnHomeStop").addEventListener("click", () => { doStop(); });
+$("btnStop").addEventListener("click", doStop);
+document.addEventListener("keydown", e => { if(e.key === "Escape"){ e.preventDefault(); doStop(); flashStop(); } });
+$("logClear").addEventListener("click", () => { $("log").innerHTML = ""; });
+function flashStop(){ const b=$("btnStop"); b.style.outline="3px solid #fff"; setTimeout(()=>b.style.outline="",150); }
+
+// ---- Calibration ----
+function calibrate(course){
+  maxMm = course; calibrated = true; homing = false;
+  const s = $("slider");
+  s.min = 0; s.max = course; s.step = Math.max(0.1, +(course/1000).toFixed(2));
+  s.value = Math.min(Math.max(lastActual, 0), course);   // démarre à la position réelle
+  updateSetLabel(s.value);
+  setSliderEnabled(true);
+  $("maxVal").textContent = course.toFixed(1);
+  $("scaleMax").textContent = course.toFixed(0);
+  $("btnHome").disabled = false;
+  $("btnHomeStop").disabled = true;
+  setBanner("ok", "Calibré — course utile : " + course.toFixed(1) + " mm. Consigne active.");
+  refreshBar();
+}
+function decalibrate(reason){
+  calibrated = false; maxMm = null; homing = false;
+  setSliderEnabled(false);
+  $("maxVal").textContent = "?"; $("scaleMax").textContent = "max";
+  $("btnHome").disabled = false; $("btnHomeStop").disabled = true;
+  setBanner("need", reason || "Homing requis — le maximum du mât n'est pas connu.");
+}
+function setBanner(cls, txt){ const b=$("banner"); b.className = "banner "+cls; b.textContent = txt; }
+
+// ---- Télémétrie ----
+function refreshBar(){
+  if(maxMm){
+    const pct = Math.max(0, Math.min(100, lastActual/maxMm*100));
+    $("actualBar").style.width = pct + "%";
+    $("pctVal").textContent = Math.round(pct);
+  }
+}
+function setDot(id, cls){ $(id).className = "dot" + (cls ? " "+cls : ""); }
+function onState(data){
+  let s; try { s = JSON.parse(data); } catch { return; }
+  if(typeof s.position_mm === "number"){
+    lastActual = s.position_mm;
+    $("posVal").textContent = s.position_mm.toFixed(1);
+    refreshBar();
+  }
+  $("fdcMin").className = "dot" + (s.fdc_min ? " hit" : " ok");
+  $("fdcMax").className = "dot" + (s.fdc_max ? " hit" : " ok");
+}
+function onEvent(line){
+  logLine(line);
+  const m = line.match(/MSG:HOMING_OK,COURSE:(-?\d+(?:\.\d+)?)/);
+  if(m){ calibrate(parseFloat(m[1])); return; }
+  if(/^MSG:HOMING\b/.test(line) && homing){ setBanner("busy", "Homing… " + line.replace(/^MSG:/,"")); return; }
+  if(/^ERR:HOMING/.test(line)){ decalibrate("Échec du homing : " + line + ". Réessayer."); return; }
+  if(/^ERR:ENC_OR_STALL/.test(line) || /^MSG:BOOT/.test(line)){
+    decalibrate("Homing perdu (" + line.split(",")[0] + ") — relancer un homing.");
+  }
+}
+function onLink(data){
+  const up = /connected/i.test(data) && !/dis/i.test(data);
+  setDot("linkDot", up ? "ok" : "bad");
+  $("linkTxt").textContent = up ? "mât série ✓" : "mât série ✗";
+}
+
+// ---- Journal ----
+function logLine(line){
+  const box = $("log");
+  const near = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  const div = document.createElement("div");
+  let cls = "l-msg";
+  if(line.startsWith("ACK")) cls = "l-ack";
+  else if(line.startsWith("WARN")) cls = "l-warn";
+  else if(line.startsWith("ERR")) cls = "l-err";
+  div.className = cls;
+  const t = new Date().toLocaleTimeString();
+  div.textContent = t + "  " + line;
+  box.appendChild(div);
+  while(box.childElementCount > 200) box.removeChild(box.firstChild);
+  if(near) box.scrollTop = box.scrollHeight;
+}
+
+// ---- Flux SSE ----
+function connect(){
+  const es = new EventSource("/events");
+  es.onopen  = () => { setDot("srvDot","ok"); $("srvTxt").textContent = "serveur ✓"; };
+  es.onerror = () => { setDot("srvDot","bad"); $("srvTxt").textContent = "serveur ✗ (reconnexion…)"; };
+  es.addEventListener("state", e => onState(e.data));
+  es.addEventListener("event", e => onEvent(e.data));
+  es.addEventListener("link",  e => onLink(e.data));
+}
+connect();
+</script>
+</body>
+</html>
