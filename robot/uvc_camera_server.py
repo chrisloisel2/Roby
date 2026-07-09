@@ -259,8 +259,8 @@ class CameraManager:
     def __init__(
         self,
         *,
-        width: int = 1920,
-        height: int = 1080,
+        width: int = 1280,
+        height: int = 720,
         jpeg_quality: int = 60,
         max_probe_index: int = 8,
         discover_every_sec: float = 3.0,
@@ -367,15 +367,20 @@ class MultiCameraServer:
         last_sent: dict[int, int] = {}
         warned_no_frame: set[int] = set()
         last_sent_list: list[dict] | None = None
+        last_list_check = 0.0
+        LIST_CHECK_PERIOD_SEC = 1.0  # a plugged-in camera is a human-timescale event -- no need to rebuild+sort+diff the list on every frame tick (was costing a lock + list/dict rebuild hundreds of times/sec per client, pure overhead competing with actual frame sends for CPU/GIL time)
 
         try:
             while True:
                 cams = self.manager.active_captures()
 
-                current_list = self.manager.snapshot()
-                if current_list != last_sent_list:
-                    await websocket.send(json.dumps({"type": "camera_list", "cameras": current_list}))
-                    last_sent_list = current_list
+                now = time.monotonic()
+                if now - last_list_check >= LIST_CHECK_PERIOD_SEC:
+                    last_list_check = now
+                    current_list = self.manager.snapshot()
+                    if current_list != last_sent_list:
+                        await websocket.send(json.dumps({"type": "camera_list", "cameras": current_list}))
+                        last_sent_list = current_list
 
                 sent_any = False
                 live_ids = set()
@@ -425,7 +430,18 @@ class MultiCameraServer:
             max_queue=1,
             compression=None,
             ping_interval=None,
-            write_limit=(1024 * 1024, 0),  # (high, low) write-buffer watermarks
+            # (high, low) write-buffer watermarks: send() awaits once the
+            # buffered-but-unsent bytes exceed `high`, resuming once they
+            # drop back under `low`. low=0 (the old setting) means a full
+            # drain to zero is required before ANY further send can
+            # proceed -- with two simultaneous 1080p MJPEG streams sharing
+            # this one connection (~20+ Mbps combined at 15fps), a single
+            # momentary dip below that combined rate is enough to fill the
+            # buffer, and demanding a complete drain before resuming
+            # serializes/stalls both cameras' sends worse than necessary.
+            # A non-zero low lets sending resume as soon as there's
+            # meaningfully less backlog, instead of waiting for none at all.
+            write_limit=(1024 * 1024, 256 * 1024),
         ):
             print(f"[multicam] Listening on ws://{self.host}:{self.port}, discovering cameras...", flush=True)
             await asyncio.Future()
