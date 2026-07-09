@@ -7,17 +7,21 @@ GELLO, caméra et interface web. Deux PC : opérateur et robot.
 [Joystick + GELLO]
         v
 [PC opérateur]  input_agent.py · web_server.py · zenohd
-        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (caméra, port 8765)
-        v                                  |
-[PC robot]      robot_agent.py (base) · arm_agent.py (bras) · camera_pub.py
+        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (caméra avant, port 8765)
+        v                                  ^  WebSocket direct (Insta360, port 8766)
+[PC robot]      robot_agent.py (base) · arm_agent.py (bras) · camera_pub.py · insta360_pub.py
         v
-[Robot + bras + caméra]
+[Robot + bras + 2 caméras]
 ```
 
-Seuls base/bras/état passent par Zenoh + web_server.py. La caméra est un
-lien **WebSocket direct** navigateur <-> `camera_pub.py` (pas de hop Zenoh ni
-web_server.py sur ce chemin) — voir [Structure](#structure) et la table des
-clés Zenoh plus bas.
+Seuls base/bras/état passent par Zenoh + web_server.py. Les DEUX caméras
+sont des liens **WebSocket direct** navigateur <-> robot (pas de hop Zenoh
+ni web_server.py sur ce chemin) — voir [Structure](#structure) et la table
+des clés Zenoh plus bas. `camera_pub.py` (avant) et `insta360_pub.py`
+(Insta360, mode webcam USB) partagent la même implémentation
+(`robot/uvc_camera_server.py`), chacun sur son propre port et son propre
+process, pour qu'une caméra en panne n'affecte jamais l'autre ni la base/le
+bras.
 
 `robot_agent.py` (base) et `arm_agent.py` (bras) sont deux process **séparés**
 sur le PC robot, avec chacun son propre watchdog de sécurité local — voir
@@ -43,10 +47,12 @@ operator/
 robot/
   robot_agent.py         base mecanum : applique les commandes + watchdog LOCAL
   arm_agent.py            bras B601 : idem, process séparé (env conda lerobot)
-  camera_pub.py           caméra -> JPEG -> WebSocket direct navigateur (port 8765, PAS Zenoh)
+  uvc_camera_server.py    serveur caméra générique (partagé par les deux ci-dessous)
+  camera_pub.py           caméra avant (HSTD) -> JPEG -> WebSocket direct navigateur (port 8765, PAS Zenoh)
+  insta360_pub.py         Insta360 (mode webcam USB) -> JPEG -> WebSocket direct navigateur (port 8766, PAS Zenoh)
 scripts/
   start_operator.sh      lance zenohd + web_server + input_agent
-  start_robot.sh         lance robot_agent + camera_pub
+  start_robot.sh         lance robot_agent + camera_pub + insta360_pub (+ arm_agent)
   start_arm.sh            lance arm_agent (séparé, voir plus bas)
 ```
 
@@ -98,22 +104,26 @@ en0` (local) ou `tailscale ip -4` (Tailscale) sur le PC opérateur donne l'IP
 GELLO_PORT=/dev/tty.usbserial-XXXX scripts/start_operator.sh   # zenohd + web_server + input_agent
 
 # PC robot
-OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra + bras (défaut)
+OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + 2 caméras + bras (défaut)
 OPERATOR_IP=192.168.15.106 scripts/start_arm.sh     # bras seul -- voir section dédiée, séparé exprès
 ```
 
 `start_robot.sh` a deux flags d'opt-out, pour quand un adaptateur CAN est
 débranché/en panne et que tu veux quand même le reste de la stack au lieu
-d'être bloqué par les vérifications fail-fast :
+d'être bloqué par les vérifications fail-fast. Les deux caméras tournent
+dans tous les cas, y compris ces deux modes (ni l'une ni l'autre n'a besoin
+d'OPERATOR_IP) :
 
 ```bash
-NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra, pas de bras
-CAMERA_ONLY=1 scripts/start_robot.sh                              # caméra seule (pas d'OPERATOR_IP requis)
+NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + 2 caméras, pas de bras
+CAMERA_ONLY=1 scripts/start_robot.sh                              # 2 caméras seules (pas d'OPERATOR_IP requis)
 ```
 
-La page opérateur se connecte à la caméra via `?robotIp=<ip-robot>` dans
-l'URL (défaut : `169.254.222.31`, voir `DEFAULT_ROBOT_IP` dans
-`operator/web/static/js/camera.js`) — à ajuster si l'IP du robot diffère.
+La page opérateur se connecte aux deux caméras via `?robotIp=<ip-robot>`
+dans l'URL (même IP pour les deux, ports différents en dur : 8765 pour
+`camera.js`/`camera_pub.py`, 8766 pour `camera2.js`/`insta360_pub.py` --
+défaut `169.254.222.31`, voir `DEFAULT_ROBOT_IP` dans chaque fichier JS) —
+à ajuster si l'IP du robot diffère.
 
 `GELLO_PORT` est optionnel : sans lui, `input_agent.py` tourne normalement
 (base + web) mais le bras GELLO reste désactivé (`read_gello()` renvoie
@@ -158,12 +168,25 @@ export OPERATOR_IP=<ip_pc_operateur>
 robot (HSTD USB3.0), capturée en 1920x1200 et servie directement au
 navigateur par son propre serveur WebSocket (`ws://<ip-robot>:8765`, pas de
 Zenoh sur ce chemin — n'a donc pas besoin de `OPERATOR_IP`). Deux pièges
-rencontrés, tous deux déjà corrigés dans le code : ne pas forcer
-`CAP_PROP_FPS` via `cap.set()` (casse la négociation de la pipeline
-GStreamer sur cette caméra à cette résolution), et l'index `/dev/videoN`
-n'est pas fiable d'un boot à l'autre (renumérotation USB) —
-`camera_pub.py` sonde et retient automatiquement le premier index qui
-délivre une vraie frame.
+rencontrés, tous deux déjà corrigés dans le code (`robot/uvc_camera_server.py`,
+partagé avec `insta360_pub.py`) : ne pas forcer `CAP_PROP_FPS` via
+`cap.set()` (casse la négociation de la pipeline GStreamer sur cette caméra
+à cette résolution), et l'index `/dev/videoN` n'est pas fiable d'un boot à
+l'autre (renumérotation USB) — chaque serveur sonde et retient
+automatiquement le premier index qui délivre une vraie frame.
+
+`insta360_pub.py` fait la même chose pour l'Insta360 branché en mode webcam
+USB sur le PC robot, sur le port 8766. Comme les deux caméras partagent le
+même sondage d'index, chacune est pinnée par un filtre sur son nom USB
+(`NAME_FILTER` dans le script -- `"HSTD"` / `"insta360"`, vus via
+`/sys/class/video4linux/videoN/name`) pour qu'un des deux serveurs
+n'attrape jamais la caméra de l'autre. Si `insta360_pub.py` ne trouve pas
+sa caméra au démarrage, `logs/insta360_pub.log` liste le nom réel de
+chaque `/dev/videoN` sondé -- ajuste `NAME_FILTER` en conséquence, ou pin
+directement `INSTA360_CAMERA_ID=<index>` pour sauter le sondage. Résolution
+et qualité JPEG dans `insta360_pub.py` sont un point de départ (le mode
+webcam UVC de l'Insta360 varie selon le modèle) -- le bloc "Camera
+configuration" du log affiche ce qui a été réellement négocié.
 
 ## Bras GELLO -> reBot B601 (leader-follower)
 
@@ -290,10 +313,10 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 | `robot/state`                | <-   | `{moving, estop, deadman_ok, fresh_cmd, ts}` (base) |
 | `robot/arm/state`            | <-   | `{connected, moving, fresh_cmd, estop, joints, ts}` (bras) |
 
-La caméra n'est **pas** un topic Zenoh : `camera_pub.py` sert le JPEG
-directement au navigateur via son propre serveur WebSocket
-(`ws://<ip-robot>:8765`), voir [Structure](#structure) et le diagramme en
-tête de fichier.
+Les caméras ne sont **pas** des topics Zenoh : `camera_pub.py` et
+`insta360_pub.py` servent chacun leur JPEG directement au navigateur via
+leur propre serveur WebSocket (`ws://<ip-robot>:8765` et `:8766`), voir
+[Structure](#structure) et le diagramme en tête de fichier.
 
 Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur ; `robot_agent.py`
 le mixe en cinématique mecanum puis met à l'échelle par `MAX_VEL`/`ROT_VEL`
@@ -326,10 +349,10 @@ le réarme. Détails : [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader
   des no-op **volontaires** : le bras est piloté par le process séparé
   `arm_agent.py` (voir [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower)),
   pas par `robot_agent.py`.
-- Caméra : JPEG en 1920×1200, servi par `camera_pub.py` directement au
-  navigateur en WebSocket (`ws://<ip-robot>:8765`), plus de hop Zenoh ni
-  web_server.py sur ce chemin — Zenoh garde les commandes, l'état, le
-  heartbeat et la supervision.
+- Caméras : JPEG servi directement au navigateur en WebSocket par
+  `camera_pub.py` (1920×1200, `:8765`) et `insta360_pub.py` (`:8766`),
+  plus de hop Zenoh ni web_server.py sur ce chemin — Zenoh garde les
+  commandes, l'état, le heartbeat et la supervision.
 
 ## Plan de réalisation
 

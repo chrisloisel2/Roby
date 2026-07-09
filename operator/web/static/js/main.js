@@ -3,6 +3,7 @@
 //   config.js    central settings store (localStorage, versioned, exportable)
 //   net.js       auto-reconnecting WebSockets
 //   camera.js    ws://<robot-ip>:8765 (direct to robot) -> canvas (latest-frame rendering)
+//   camera2.js   ws://<robot-ip>:8766 (Insta360, direct to robot) -> picture-in-picture canvas
 //   status.js    /ws/status -> tiles, banner, arm joint gauges
 //   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control
 //   joystick.js  Gamepad API + dynamic mapping
@@ -11,6 +12,7 @@
 
 import { config } from "./config.js";
 import { initCamera } from "./camera.js";
+import { initCamera2 } from "./camera2.js";
 import { initStatus, setTile } from "./status.js";
 import { initControl } from "./control.js";
 import { initJoystick } from "./joystick.js";
@@ -20,6 +22,7 @@ import { initSettings } from "./settings.js";
 const $ = (id) => document.getElementById(id);
 
 const camera = initCamera({ setTile });
+initCamera2();
 const status = initStatus();
 const control = initControl({ onFullscreen: camera.toggleFullscreen });
 const joystick = initJoystick({

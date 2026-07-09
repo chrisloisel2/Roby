@@ -281,6 +281,45 @@ main {
 	animation: pulse 1.4s infinite;
 }
 
+/* ---------- Video: Insta360 picture-in-picture ---------- */
+.video-pip {
+	position: absolute;
+	bottom: 12px;
+	left: 12px;
+	width: 220px;
+	aspect-ratio: 16 / 9;
+	border-radius: 8px;
+	overflow: hidden;
+	border: 1px solid var(--hairline-2);
+	background: #000;
+	box-shadow: 0 4px 16px #000a;
+	z-index: 2;
+}
+
+.video-pip canvas {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+}
+
+.video-pip .pip-label {
+	position: absolute;
+	top: 6px;
+	left: 6px;
+	z-index: 2;
+	padding: 3px 8px;
+	font-size: 10.5px;
+}
+
+.video-pip .noSignal .sub {
+	font-size: 10px;
+	padding: 0 10px;
+	text-align: center;
+}
+
 .noSignal {
 	position: absolute;
 	inset: 0;
