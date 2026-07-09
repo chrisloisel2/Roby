@@ -1,31 +1,34 @@
 #!/usr/bin/env python3
-"""Generic UVC-webcam-to-WebSocket server.
+"""Generic UVC-webcam capture + multi-camera WebSocket server.
 
-Shared by robot/camera_pub.py (front HSTD camera) and
-robot/insta360_pub.py (Insta360, in USB webcam mode) -- both PCs' cameras
-are plugged into the same robot PC and each gets its own CameraServer
-instance (own port, own process, launched separately by
-scripts/start_robot.sh) so one camera stalling or dying never affects the
-other.
+Used by robot/camera_pub.py to serve N cameras (currently: front + a second
+generic UVC camera) over a SINGLE WebSocket connection/port, so both feeds
+get byte-for-byte identical network treatment -- same TCP connection, same
+write-buffer/backpressure domain, same asyncio scheduling -- instead of each
+camera racing independently over its own socket. Every binary message sent
+to a client is [1 byte camera_id][JPEG bytes]; the browser demuxes by that
+first byte (see operator/web/static/js/videoMux.js).
 
-Architecture (see either caller's module docstring for the "why direct
-WebSocket, not Zenoh" rationale): capture (camera_loop, background thread)
-and delivery (stream, per client) are decoupled -- the thread always holds
-only the newest encoded frame (latest_jpeg/latest_id under a lock), and each
-client coroutine sends it the instant it changes. A slow client or a
-stalled encode never queues up stale frames -- both sides just skip
-straight to whatever is newest.
+Two classes:
+  CameraCapture      one camera's capture thread (open, negotiate, encode
+                     loop). Holds only the newest encoded frame
+                     (latest_jpeg/latest_id under a lock) -- a slow client
+                     or a stalled encode never queues up stale frames, both
+                     sides just skip straight to whatever is newest.
+  MultiCameraServer  runs ONE websockets.serve() and, per connected client,
+                     round-robins over every CameraCapture's latest frame,
+                     sending whichever changed.
 
 Logging (all flush=True, since this runs backgrounded with stdout
 redirected to a file -- a print that isn't flushed can simply never show up
-in the log if the process is later killed): open_camera() logs every index
-it probes and why each was rejected; camera_loop() prints a FATAL line (not
-just a bare traceback) if it can never open a camera, and otherwise a
-heartbeat every ~2s with frames/fps/failure counts so "server is up but
-browser shows nothing" is diagnosable from the log alone -- no heartbeat at
-all -> camera never opened; heartbeat with 0 fps -> opened but not
-producing frames; heartbeat healthy but no "client connected" line ->
-network/reachability, not the camera.
+in the log if the process is later killed): CameraCapture.open_camera()
+logs every index it probes and why each was rejected; its capture loop
+prints a FATAL line (not just a bare traceback) if it can never open a
+camera, and otherwise a heartbeat every ~2s with frames/fps/failure counts
+so "server is up but browser shows nothing" is diagnosable from the log
+alone -- no heartbeat at all -> camera never opened; heartbeat with 0 fps ->
+opened but not producing frames; heartbeat healthy but no "client
+connected" line -> network/reachability, not the camera.
 """
 import asyncio
 import socket
@@ -42,10 +45,15 @@ def _fourcc_str(fourcc_int: int) -> str:
 
 
 def _video_device_name(idx: int) -> str:
-    """Best-effort /dev/videoN -> USB product string, via the standard V4L2
-    sysfs node. Used to tell two different UVC cameras apart when
-    auto-probing (see CameraServer.name_filter) -- returns "" if unreadable
-    rather than raising, since this is advisory, not required.
+    """Best-effort /dev/videoN -> V4L2 device name, via the standard sysfs
+    node. Used to tell two different UVC cameras apart when auto-probing
+    (see CameraCapture.name_filter) -- returns "" if unreadable rather than
+    raising, since this is advisory, not required. NOTE: this is NOT the
+    same string `lsusb` reports (confirmed empirically 2026-07-09: lsusb
+    showed "HSTD USB3.0 Camera" for a device whose V4L2 name is the more
+    generic "USB3.0 Camera: USB3.0 Camera") -- always match against what
+    this function actually returns (visible in the probe log lines below),
+    not against lsusb output.
     """
     try:
         return Path(f"/sys/class/video4linux/video{idx}/name").read_text().strip()
@@ -53,37 +61,42 @@ def _video_device_name(idx: int) -> str:
         return ""
 
 
-class CameraServer:
+class CameraCapture:
     def __init__(
         self,
         *,
+        cam_id: int,
         label: str,
-        host: str = "0.0.0.0",
-        port: int,
         width: int,
         height: int,
         jpeg_quality: int,
+        camera_id: int | None = None,
         max_probe_index: int = 8,
         name_filter: str | None = None,
         heartbeat_sec: float = 2.0,
     ):
         """
-        label         short tag prefixed on every log line (e.g. "camera_pub").
-        name_filter   case-insensitive substring matched against each probed
-                      index's /dev/videoN USB product name (via sysfs). Only
-                      used when auto-probing (i.e. no explicit index is
-                      passed to open_camera) -- with two+ cameras on the same
-                      box, unfiltered index probing risks two server
-                      processes racing for the same /dev/videoN and each
-                      other's camera. None = old single-camera behavior
-                      (first index that opens AND reads wins).
+        cam_id        1-byte tag prefixed on every WebSocket message sent
+                      for this camera (see MultiCameraServer) -- how the
+                      browser tells the two streams apart on one socket.
+        label         short tag prefixed on every log line (e.g. "front").
+        camera_id     explicit /dev/videoN index (e.g. from a CAMERA_ID env
+                      var). None = auto-probe.
+        name_filter   case-insensitive substring matched against each
+                      probed index's V4L2 device name (see
+                      _video_device_name). Only used when auto-probing
+                      (camera_id is None) -- with two+ cameras on the same
+                      box, unfiltered probing risks two capture threads
+                      racing for the same /dev/videoN and each other's
+                      camera. None = old single-camera behavior (first
+                      index that opens AND reads wins).
         """
+        self.cam_id = cam_id
         self.label = label
-        self.host = host
-        self.port = port
         self.width = width
         self.height = height
         self.jpeg_quality = jpeg_quality
+        self.camera_id = camera_id
         self.max_probe_index = max_probe_index
         self.name_filter = name_filter
         self.heartbeat_sec = heartbeat_sec
@@ -96,12 +109,12 @@ class CameraServer:
     def _log(self, msg: str) -> None:
         print(f"[{self.label}] {msg}", flush=True)
 
-    def open_camera(self, camera_id: int | None) -> tuple[cv2.VideoCapture, int]:
+    def open_camera(self) -> tuple[cv2.VideoCapture, int]:
         """Open a working camera by index.
 
-        If ``camera_id`` is given, use it directly (bypasses name_filter --
+        If self.camera_id is set, use it directly (bypasses name_filter --
         an explicit index always wins). Otherwise probe indices
-        0..max_probe_index, skip any whose sysfs name doesn't match
+        0..max_probe_index, skip any whose V4L2 name doesn't match
         name_filter (when set), and return the first one that both opens
         AND delivers a real frame: USB webcams commonly expose a second
         metadata-only /dev/videoN node that opens fine but never reads, and
@@ -110,10 +123,10 @@ class CameraServer:
         hardcoded index silently starts pointing at the wrong (or a dead)
         node.
         """
-        candidates = [camera_id] if camera_id is not None else range(self.max_probe_index + 1)
+        candidates = [self.camera_id] if self.camera_id is not None else range(self.max_probe_index + 1)
         for idx in candidates:
             name = _video_device_name(idx)
-            if camera_id is None and self.name_filter and self.name_filter.lower() not in name.lower():
+            if self.camera_id is None and self.name_filter and self.name_filter.lower() not in name.lower():
                 self._log(f"probe /dev/video{idx}: name={name!r} doesn't match filter {self.name_filter!r}, skipping")
                 continue
             cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
@@ -127,19 +140,19 @@ class CameraServer:
                 return cap, idx
             self._log(f"probe /dev/video{idx} (name={name!r}): opened but read() failed (likely a metadata-only node), skipping")
             cap.release()
-        tried = f"index {camera_id}" if camera_id is not None else f"indices 0..{self.max_probe_index}"
-        filt = f", name filter {self.name_filter!r}" if camera_id is None and self.name_filter else ""
+        tried = f"index {self.camera_id}" if self.camera_id is not None else f"indices 0..{self.max_probe_index}"
+        filt = f", name filter {self.name_filter!r}" if self.camera_id is None and self.name_filter else ""
         raise RuntimeError(f"No working camera found (tried {tried}{filt})")
 
-    def camera_loop(self, camera_id: int | None) -> None:
+    def _loop(self) -> None:
         try:
-            cap, idx = self.open_camera(camera_id)
+            cap, idx = self.open_camera()
         except Exception as e:
             self._log(
                 f"FATAL -- {e}. The WebSocket server will keep listening "
                 f"(so start_robot.sh's liveness check still passes) but "
-                f"will never have a frame to send -- this is the 'server "
-                f"up, 0 frames in the browser' symptom."
+                f"this camera will never have a frame to send -- this is "
+                f"the 'server up, 0 frames in the browser' symptom."
             )
             raise
 
@@ -151,8 +164,8 @@ class CameraServer:
         # it doesn't natively expose at this resolution breaks GStreamer
         # pipeline negotiation outright (isOpened() goes False) -- since
         # that failure mode costs nothing to avoid and we have no evidence
-        # either camera needs an explicit FPS request, every CameraServer
-        # instance skips it.
+        # any camera here needs an explicit FPS request, every
+        # CameraCapture instance skips it.
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
@@ -162,7 +175,7 @@ class CameraServer:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         negotiated_fourcc = _fourcc_str(int(cap.get(cv2.CAP_PROP_FOURCC)))
-        self._log(f"streaming camera index {idx} on ws://{self.host}:{self.port}")
+        self._log(f"streaming camera index {idx} (cam_id={self.cam_id})")
         self._log("Camera configuration:")
         self._log(f"  FOURCC: {negotiated_fourcc!r}" + (" (WARNING: expected 'MJPG')" if negotiated_fourcc != "MJPG" else ""))
         self._log(f"  Width : {cap.get(cv2.CAP_PROP_FRAME_WIDTH)}")
@@ -214,65 +227,91 @@ class CameraServer:
         finally:
             cap.release()
 
-    async def stream(self, websocket):
+    def start(self) -> threading.Thread:
+        thread = threading.Thread(target=self._loop, daemon=True)
+        thread.start()
+        return thread
+
+
+class MultiCameraServer:
+    """Serves N CameraCapture instances over ONE WebSocket connection per
+    client -- each message is [1 byte cam_id][JPEG bytes], so both cameras
+    share identical connection-level behavior (TCP_NODELAY, write-buffer
+    watermarks, asyncio scheduling) instead of two independent sockets that
+    could each stall/jitter differently.
+    """
+
+    def __init__(self, *, host: str = "0.0.0.0", port: int, cameras: list[CameraCapture]):
+        self.host = host
+        self.port = port
+        self.cameras = cameras
+
+    async def _stream(self, websocket):
         peer = websocket.remote_address
-        self._log(f"client connected from {peer}")
+        print(f"[multicam] client connected from {peer}", flush=True)
 
         sock = websocket.transport.get_extra_info("socket")
         if sock is not None:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        last_sent_id = -1
-        warned_no_frame = False
+        last_sent = {cam.cam_id: -1 for cam in self.cameras}
+        warned_no_frame = {cam.cam_id: False for cam in self.cameras}
 
         try:
             while True:
-                with self.lock:
-                    jpeg = self.latest_jpeg
-                    frame_id = self.latest_id
+                sent_any = False
+                for cam in self.cameras:
+                    with cam.lock:
+                        jpeg = cam.latest_jpeg
+                        frame_id = cam.latest_id
 
-                if jpeg is None:
-                    if not warned_no_frame:
-                        self._log(f"client {peer} connected but no frame captured yet -- check the camera_loop startup/heartbeat lines above")
-                        warned_no_frame = True
-                    await asyncio.sleep(0.05)
-                    continue
+                    if jpeg is None:
+                        if not warned_no_frame[cam.cam_id]:
+                            print(
+                                f"[multicam] client {peer}: cam_id={cam.cam_id} ({cam.label}) "
+                                f"has no frame yet -- check that camera's startup/heartbeat lines above",
+                                flush=True,
+                            )
+                            warned_no_frame[cam.cam_id] = True
+                        continue
 
-                if frame_id == last_sent_id:
-                    await asyncio.sleep(0.001)
-                    continue
+                    if frame_id == last_sent[cam.cam_id]:
+                        continue
 
-                last_sent_id = frame_id
-                await websocket.send(jpeg)
-                await asyncio.sleep(0)  # give control back to asyncio
+                    last_sent[cam.cam_id] = frame_id
+                    await websocket.send(bytes([cam.cam_id]) + jpeg)
+                    sent_any = True
+
+                await asyncio.sleep(0 if sent_any else 0.001)
         except websockets.ConnectionClosed:
-            self._log(f"client {peer} disconnected")
+            print(f"[multicam] client {peer} disconnected", flush=True)
 
-    async def _main(self, camera_id: int | None) -> None:
-        thread = threading.Thread(target=self.camera_loop, args=(camera_id,), daemon=True)
-        thread.start()
+    async def _main(self) -> None:
+        for cam in self.cameras:
+            cam.start()
 
         async with websockets.serve(
-            self.stream,
+            self._stream,
             self.host,
             self.port,
             max_size=None,
             max_queue=1,
             compression=None,
             ping_interval=None,
-            write_limit=(1024 * 1024, 0),  # (high, low) write-buffer watermarks; see stream()
+            write_limit=(1024 * 1024, 0),  # (high, low) write-buffer watermarks
         ):
-            self._log(f"Listening on ws://{self.host}:{self.port}")
+            print(f"[multicam] Listening on ws://{self.host}:{self.port} ({len(self.cameras)} camera(s))", flush=True)
             await asyncio.Future()
 
-    def run(self, camera_id: int | None) -> None:
-        """Blocking: opens the camera and serves it forever. Call this
-        directly from `if __name__ == "__main__":` in each caller script.
+    def run(self) -> None:
+        """Blocking: starts every camera's capture thread and serves them
+        forever. Call this directly from `if __name__ == "__main__":`.
         """
         try:
-            asyncio.run(self._main(camera_id))
+            asyncio.run(self._main())
         except KeyboardInterrupt:
             pass
         finally:
-            self.running = False
-            self._log("stopped.")
+            for cam in self.cameras:
+                cam.running = False
+            print("[multicam] stopped.", flush=True)

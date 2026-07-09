@@ -1,22 +1,19 @@
-// Secondary camera stream: the Insta360, plugged into the robot PC in USB
-// webcam mode and served by robot/insta360_pub.py -- same architecture as
-// camera.js's front-camera stream (direct WebSocket to the robot, latest-
-// frame-only rendering), but deliberately NOT sharing camera.js's code: this
-// is a small picture-in-picture thumbnail with no fps/age/fit/fullscreen
-// controls, so the two modules diverge enough that sharing would mean a
+// Secondary camera stream: a second UVC webcam plugged into the robot PC,
+// served by the same robot/camera_pub.py process as the front camera (see
+// robot/uvc_camera_server.py). Rendered as a small picture-in-picture
+// thumbnail with no fps/age/fit/fullscreen controls -- deliberately NOT
+// sharing camera.js's code, since that divergence in UI role would mean a
 // pile of unused options on one side or the other.
 //
-// Same port convention as camera.js: robot IP from ?robotIp= (falls back to
-// DEFAULT_ROBOT_IP), but a different port (8766, not camera.js's 8765) --
-// insta360_pub.py is a separate process/server from camera_pub.py.
+// Frames arrive over the SAME shared WebSocket connection as camera.js
+// (videoMux.js), demuxed by cam_id -- see that file for why one connection,
+// not two: both cameras get identical connection-level treatment (latency,
+// backpressure, scheduling) instead of drifting apart independently.
 
 import { config } from "./config.js";
-import { createSocket } from "./net.js";
+import { CAM_SECOND } from "./videoMux.js";
 
-const DEFAULT_ROBOT_IP = "169.254.222.31";
-const INSTA360_PORT = 8766;
-
-export function initCamera2() {
+export function initCamera2({ mux }) {
 	const cam2 = document.getElementById("cam2");
 	const noSignal2 = document.getElementById("noSignal2");
 	if (!cam2 || !noSignal2) return null;
@@ -25,13 +22,10 @@ export function initCamera2() {
 	let lastFrame = 0;
 	let latestData = null, dataSeq = 0, displayedSeq = -1, rendering = false;
 
-	const sock = createSocket(`ws://${new URLSearchParams(location.search).get("robotIp") || DEFAULT_ROBOT_IP}:${INSTA360_PORT}`, {
-		binary: true,
-		onMessage: (e) => {
-			latestData = e.data;
-			dataSeq++;
-			lastFrame = performance.now();
-		},
+	mux.onFrame(CAM_SECOND, (jpegBytes) => {
+		latestData = jpegBytes;
+		dataSeq++;
+		lastFrame = performance.now();
 	});
 
 	async function renderLoop() {
@@ -59,5 +53,5 @@ export function initCamera2() {
 		noSignal2.classList.toggle("show", age > config.get("ui.staleMs"));
 	}, 250);
 
-	return { isAlive: sock.isAlive };
+	return { isAlive: mux.isAlive };
 }

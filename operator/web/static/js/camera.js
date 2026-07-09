@@ -1,29 +1,25 @@
 // Camera stream: binary JPEG frames over WebSocket, rendered to a canvas.
 //
-// Connects DIRECTLY to robot/camera_pub.py's own WebSocket server
-// (ws://<robot-ip>:8765) instead of relaying through web_server.py's
-// /ws/camera -- one fewer hop cuts real latency at this resolution. The
-// robot's IP is read from the ?robotIp= query param (falls back to
-// DEFAULT_ROBOT_IP below) since it's link-local and not discoverable from
-// the operator page's own origin the way web_server.py's other sockets are.
+// Frames arrive over a SHARED WebSocket connection (videoMux.js, direct to
+// robot/camera_pub.py -- not relayed through web_server.py's /ws/*, one
+// fewer hop cuts real latency at this resolution) also used by camera2.js
+// for the second camera -- see videoMux.js for why that's one connection,
+// not two. This module just subscribes to its own cam_id.
 //
-// Receiving a frame and displaying it are deliberately decoupled: onmessage
-// just stashes the latest ArrayBuffer (cheap), a requestAnimationFrame loop
-// does the actual decode/paint work. If the main thread is ever busy
-// (gamepad polling, other WS handlers, a GC pause) and several frames pile
-// up in the WS event queue, onmessage still drains them all in order --
-// but only the LAST one is ever rendered, so a momentary stall can no
-// longer turn into a growing backlog of stale frames displayed late one
-// after another (that was the actual cause of latency drifting from
-// ~200ms up to ~0.5s instead of staying flat).
+// Receiving a frame and displaying it are deliberately decoupled: the mux
+// callback just stashes the latest frame bytes (cheap), a
+// requestAnimationFrame loop does the actual decode/paint work. If the main
+// thread is ever busy (gamepad polling, other WS handlers, a GC pause) and
+// several frames pile up in the WS event queue, the callback still drains
+// them all in order -- but only the LAST one is ever rendered, so a
+// momentary stall can no longer turn into a growing backlog of stale frames
+// displayed late one after another (that was the actual cause of latency
+// drifting from ~200ms up to ~0.5s instead of staying flat).
 
 import { config } from "./config.js";
-import { createSocket } from "./net.js";
+import { CAM_FRONT } from "./videoMux.js";
 
-const DEFAULT_ROBOT_IP = "169.254.222.31";
-const CAMERA_PORT = 8765;
-
-export function initCamera({ setTile }) {
+export function initCamera({ setTile, mux }) {
 	const cam = document.getElementById("cam");
 	const noSignal = document.getElementById("noSignal");
 	const chipAge = document.getElementById("chipAge");
@@ -36,17 +32,13 @@ export function initCamera({ setTile }) {
 	const frameStamps = [];
 	let latestCamData = null, camDataSeq = 0, displayedSeq = -1, renderingCam = false;
 
-	const robotIp = new URLSearchParams(location.search).get("robotIp") || DEFAULT_ROBOT_IP;
-	const camSock = createSocket(`ws://${robotIp}:${CAMERA_PORT}`, {
-		binary: true,
-		onMessage: (e) => {
-			latestCamData = e.data;
-			camDataSeq++;
-			const now = performance.now();
-			lastFrame = now;
-			frameStamps.push(now);
-			if (frameStamps.length > 30) frameStamps.shift();
-		},
+	mux.onFrame(CAM_FRONT, (jpegBytes) => {
+		latestCamData = jpegBytes;
+		camDataSeq++;
+		const now = performance.now();
+		lastFrame = now;
+		frameStamps.push(now);
+		if (frameStamps.length > 30) frameStamps.shift();
 	});
 
 	async function renderCamFrame() {
@@ -107,5 +99,5 @@ export function initCamera({ setTile }) {
 	document.getElementById("btnFullscreen").addEventListener("click", toggleFullscreen);
 	cam.addEventListener("dblclick", toggleFullscreen);
 
-	return { isAlive: camSock.isAlive, toggleFullscreen };
+	return { isAlive: mux.isAlive, toggleFullscreen };
 }

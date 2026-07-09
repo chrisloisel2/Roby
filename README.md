@@ -7,21 +7,23 @@ GELLO, caméra et interface web. Deux PC : opérateur et robot.
 [Joystick + GELLO]
         v
 [PC opérateur]  input_agent.py · web_server.py · zenohd
-        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (caméra avant, port 8765)
-        v                                  ^  WebSocket direct (Insta360, port 8766)
-[PC robot]      robot_agent.py (base) · arm_agent.py (bras) · camera_pub.py · insta360_pub.py
+        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (2 caméras, 1 connexion, port 8765)
+        v                                  |
+[PC robot]      robot_agent.py (base) · arm_agent.py (bras) · camera_pub.py
         v
 [Robot + bras + 2 caméras]
 ```
 
 Seuls base/bras/état passent par Zenoh + web_server.py. Les DEUX caméras
-sont des liens **WebSocket direct** navigateur <-> robot (pas de hop Zenoh
-ni web_server.py sur ce chemin) — voir [Structure](#structure) et la table
-des clés Zenoh plus bas. `camera_pub.py` (avant) et `insta360_pub.py`
-(Insta360, mode webcam USB) partagent la même implémentation
-(`robot/uvc_camera_server.py`), chacun sur son propre port et son propre
-process, pour qu'une caméra en panne n'affecte jamais l'autre ni la base/le
-bras.
+sont servies par `camera_pub.py` sur une seule **connexion WebSocket
+directe** navigateur <-> robot (pas de hop Zenoh ni web_server.py sur ce
+chemin) — voir [Structure](#structure) et la table des clés Zenoh plus bas.
+Une seule connexion pour les deux flux, volontairement (pas deux sockets
+séparés) : les deux caméras reçoivent alors exactement le même traitement
+réseau (même connexion TCP, même fenêtre d'écriture, même ordonnancement
+asyncio) au lieu de deux sockets indépendants qui pourraient chacun dériver
+à leur rythme. Chaque message est `[1 octet cam_id][JPEG]` ; le navigateur
+démultiplexe par ce préfixe (`operator/web/static/js/videoMux.js`).
 
 `robot_agent.py` (base) et `arm_agent.py` (bras) sont deux process **séparés**
 sur le PC robot, avec chacun son propre watchdog de sécurité local — voir
@@ -40,19 +42,19 @@ operator/
   web/
     index.html           UI opérateur (markup seul)
     static/app.css       design system (thème sombre poste de pilotage)
-    static/js/           modules ES : config (store central), net, camera,
+    static/js/           modules ES : config (store central), net, videoMux
+                         (connexion caméra partagée), camera, camera2,
                          status, control, joystick, gello, settings, main
   gello_reader.py        lit le GELLO en série, produit des angles calibrés follower
   gello_calibration.json calibration GELLO déjà mesurée (copie de mon_gello.json)
 robot/
   robot_agent.py         base mecanum : applique les commandes + watchdog LOCAL
   arm_agent.py            bras B601 : idem, process séparé (env conda lerobot)
-  uvc_camera_server.py    serveur caméra générique (partagé par les deux ci-dessous)
-  camera_pub.py           caméra avant (HSTD) -> JPEG -> WebSocket direct navigateur (port 8765, PAS Zenoh)
-  insta360_pub.py         Insta360 (mode webcam USB) -> JPEG -> WebSocket direct navigateur (port 8766, PAS Zenoh)
+  uvc_camera_server.py    capture caméra générique + serveur WebSocket multi-caméras
+  camera_pub.py           config des 2 caméras -> JPEG -> WebSocket direct navigateur (port 8765, PAS Zenoh)
 scripts/
   start_operator.sh      lance zenohd + web_server + input_agent
-  start_robot.sh         lance robot_agent + camera_pub + insta360_pub (+ arm_agent)
+  start_robot.sh         lance robot_agent + camera_pub (+ arm_agent)
   start_arm.sh            lance arm_agent (séparé, voir plus bas)
 ```
 
@@ -104,26 +106,29 @@ en0` (local) ou `tailscale ip -4` (Tailscale) sur le PC opérateur donne l'IP
 GELLO_PORT=/dev/tty.usbserial-XXXX scripts/start_operator.sh   # zenohd + web_server + input_agent
 
 # PC robot
-OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + 2 caméras + bras (défaut)
+OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra(s) + bras (défaut)
 OPERATOR_IP=192.168.15.106 scripts/start_arm.sh     # bras seul -- voir section dédiée, séparé exprès
 ```
 
 `start_robot.sh` a deux flags d'opt-out, pour quand un adaptateur CAN est
 débranché/en panne et que tu veux quand même le reste de la stack au lieu
-d'être bloqué par les vérifications fail-fast. Les deux caméras tournent
-dans tous les cas, y compris ces deux modes (ni l'une ni l'autre n'a besoin
-d'OPERATOR_IP) :
+d'être bloqué par les vérifications fail-fast. `camera_pub.py` tourne dans
+tous les cas, y compris ces deux modes (pas besoin d'OPERATOR_IP) :
 
 ```bash
-NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + 2 caméras, pas de bras
-CAMERA_ONLY=1 scripts/start_robot.sh                              # 2 caméras seules (pas d'OPERATOR_IP requis)
+NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra(s), pas de bras
+CAMERA_ONLY=1 scripts/start_robot.sh                              # caméra(s) seules (pas d'OPERATOR_IP requis)
 ```
 
-La page opérateur se connecte aux deux caméras via `?robotIp=<ip-robot>`
-dans l'URL (même IP pour les deux, ports différents en dur : 8765 pour
-`camera.js`/`camera_pub.py`, 8766 pour `camera2.js`/`insta360_pub.py` --
-défaut `169.254.222.31`, voir `DEFAULT_ROBOT_IP` dans chaque fichier JS) —
-à ajuster si l'IP du robot diffère.
+`camera_pub.py` sert par défaut la caméra avant seule ; la seconde caméra
+ne démarre que si `SECOND_CAMERA_ID` ou `SECOND_NAME_FILTER` est configuré
+(voir plus bas) -- sinon un message dans `logs/camera_pub.log` te le
+rappelle à chaque démarrage.
+
+La page opérateur se connecte à la connexion caméra partagée via
+`?robotIp=<ip-robot>` dans l'URL (port unique 8765 pour les deux flux --
+défaut `169.254.222.31`, voir `DEFAULT_ROBOT_IP` dans
+`operator/web/static/js/videoMux.js`) — à ajuster si l'IP du robot diffère.
 
 `GELLO_PORT` est optionnel : sans lui, `input_agent.py` tourne normalement
 (base + web) mais le bras GELLO reste désactivé (`read_gello()` renvoie
@@ -164,29 +169,37 @@ export OPERATOR_IP=<ip_pc_operateur>
 .venv/bin/python3 robot/robot_agent.py
 ```
 
-`camera_pub.py` de ce dépôt fonctionne avec la caméra USB branchée sur ce
-robot (HSTD USB3.0), capturée en 1920x1200 et servie directement au
-navigateur par son propre serveur WebSocket (`ws://<ip-robot>:8765`, pas de
-Zenoh sur ce chemin — n'a donc pas besoin de `OPERATOR_IP`). Deux pièges
-rencontrés, tous deux déjà corrigés dans le code (`robot/uvc_camera_server.py`,
-partagé avec `insta360_pub.py`) : ne pas forcer `CAP_PROP_FPS` via
-`cap.set()` (casse la négociation de la pipeline GStreamer sur cette caméra
-à cette résolution), et l'index `/dev/videoN` n'est pas fiable d'un boot à
-l'autre (renumérotation USB) — chaque serveur sonde et retient
-automatiquement le premier index qui délivre une vraie frame.
+`camera_pub.py` de ce dépôt fonctionne avec la caméra USB avant branchée
+sur ce robot (HSTD USB3.0), capturée en 1920x1200 et servie directement au
+navigateur (`ws://<ip-robot>:8765`, pas de Zenoh sur ce chemin — n'a donc
+pas besoin de `OPERATOR_IP`). Deux pièges rencontrés, tous deux déjà
+corrigés dans le code (`robot/uvc_camera_server.py`) : ne pas forcer
+`CAP_PROP_FPS` via `cap.set()` (casse la négociation de la pipeline
+GStreamer sur cette caméra à cette résolution), et l'index `/dev/videoN`
+n'est pas fiable d'un boot à l'autre (renumérotation USB) — chaque caméra
+sonde et retient automatiquement le premier index qui délivre une vraie
+frame.
 
-`insta360_pub.py` fait la même chose pour l'Insta360 branché en mode webcam
-USB sur le PC robot, sur le port 8766. Comme les deux caméras partagent le
-même sondage d'index, chacune est pinnée par un filtre sur son nom USB
-(`NAME_FILTER` dans le script -- `"HSTD"` / `"insta360"`, vus via
-`/sys/class/video4linux/videoN/name`) pour qu'un des deux serveurs
-n'attrape jamais la caméra de l'autre. Si `insta360_pub.py` ne trouve pas
-sa caméra au démarrage, `logs/insta360_pub.log` liste le nom réel de
-chaque `/dev/videoN` sondé -- ajuste `NAME_FILTER` en conséquence, ou pin
-directement `INSTA360_CAMERA_ID=<index>` pour sauter le sondage. Résolution
-et qualité JPEG dans `insta360_pub.py` sont un point de départ (le mode
-webcam UVC de l'Insta360 varie selon le modèle) -- le bloc "Camera
-configuration" du log affiche ce qui a été réellement négocié.
+Une **seconde caméra USB** générique (n'importe quel UVC standard) peut
+être branchée sur le même PC robot et servie sur la même connexion,
+multiplexée avec la caméra avant (voir le diagramme en tête de fichier).
+Comme les deux caméras partagent le même sondage d'index, `camera_pub.py`
+**refuse par défaut de démarrer la seconde en sondage non filtré** (une
+course entre les deux threads de capture pourrait leur faire échanger
+silencieusement leurs caméras d'un lancement à l'autre) -- tant que
+`SECOND_CAMERA_ID` ou `SECOND_NAME_FILTER` n'est pas configuré, seule la
+caméra avant tourne, avec un rappel dans `logs/camera_pub.log` à chaque
+démarrage. Pour l'activer : branche la seconde caméra, relance, regarde les
+lignes `probe /dev/videoN` du log (elles listent le vrai nom V4L2 de
+**chaque** index, y compris ceux qu'elle ignore -- ce nom n'est PAS le même
+que celui affiché par `lsusb`, confirmé empiriquement le 2026-07-09), puis
+règle dans `robot/camera_pub.py` soit `SECOND_NAME_FILTER` (si le nom
+diffère de celui de la caméra avant) soit directement
+`SECOND_CAMERA_ID=<index>` (si les deux caméras partagent un nom
+générique identique -- le sondage par nom ne peut alors pas les
+distinguer). Résolution et qualité JPEG de la seconde caméra dans
+`camera_pub.py` sont un point de départ -- le bloc "Camera configuration"
+du log affiche ce qui a été réellement négocié.
 
 ## Bras GELLO -> reBot B601 (leader-follower)
 
@@ -313,10 +326,10 @@ La manette se **combine** avec clavier et pavé tactile (sommée et bornée à
 | `robot/state`                | <-   | `{moving, estop, deadman_ok, fresh_cmd, ts}` (base) |
 | `robot/arm/state`            | <-   | `{connected, moving, fresh_cmd, estop, joints, ts}` (bras) |
 
-Les caméras ne sont **pas** des topics Zenoh : `camera_pub.py` et
-`insta360_pub.py` servent chacun leur JPEG directement au navigateur via
-leur propre serveur WebSocket (`ws://<ip-robot>:8765` et `:8766`), voir
-[Structure](#structure) et le diagramme en tête de fichier.
+Les caméras ne sont **pas** des topics Zenoh : `camera_pub.py` sert le JPEG
+des deux caméras directement au navigateur sur une seule connexion
+WebSocket (`ws://<ip-robot>:8765`), voir [Structure](#structure) et le
+diagramme en tête de fichier.
 
 Le contrat `base` est **normalisé** `[-1, 1]` côté opérateur ; `robot_agent.py`
 le mixe en cinématique mecanum puis met à l'échelle par `MAX_VEL`/`ROT_VEL`
@@ -349,10 +362,11 @@ le réarme. Détails : [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader
   des no-op **volontaires** : le bras est piloté par le process séparé
   `arm_agent.py` (voir [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower)),
   pas par `robot_agent.py`.
-- Caméras : JPEG servi directement au navigateur en WebSocket par
-  `camera_pub.py` (1920×1200, `:8765`) et `insta360_pub.py` (`:8766`),
-  plus de hop Zenoh ni web_server.py sur ce chemin — Zenoh garde les
-  commandes, l'état, le heartbeat et la supervision.
+- Caméras : JPEG des deux caméras (avant 1920×1200 + seconde optionnelle)
+  servi directement au navigateur par `camera_pub.py` sur une seule
+  connexion WebSocket (`:8765`), plus de hop Zenoh ni web_server.py sur ce
+  chemin — Zenoh garde les commandes, l'état, le heartbeat et la
+  supervision.
 
 ## Plan de réalisation
 

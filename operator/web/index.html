@@ -46,10 +46,10 @@
 				</div>
 				<div class="rec"><span class="dot"></span>LIVE</div>
 				<div class="video-pip" id="videoPip">
-					<canvas id="cam2" role="img" aria-label="Flux caméra Insta360"></canvas>
-					<span class="chip pip-label"><span>Insta360</span></span>
+					<canvas id="cam2" role="img" aria-label="Flux caméra secondaire"></canvas>
+					<span class="chip pip-label"><span>caméra 2</span></span>
 					<div class="noSignal show" id="noSignal2">
-						<div class="sub">en attente du flux Insta360…</div>
+						<div class="sub">en attente du flux caméra 2…</div>
 					</div>
 				</div>
 				<div class="noSignal show" id="noSignal">
@@ -66,7 +66,7 @@
 					<div class="safety">
 						<button class="estop" id="estop">⛔ ARRÊT D'URGENCE</button>
 						<button class="reset" id="reset">↻ RÉARMER</button>
-						<button class="deadman" id="deadman">HOMME-MORT — MAINTENIR
+						<button class="deadman" id="deadman">DEADMAN SWITCH — MAINTENIR
 							<small>maintenir <span class="kbd">Espace</span> ou ce bouton pour autoriser le
 								mouvement</small>
 						</button>
@@ -81,7 +81,7 @@
 							<div class="v"><span class="ic"></span><span>—</span></div>
 						</div>
 						<div class="tile" id="t-dead" data-s="warning">
-							<div class="k">Homme-mort</div>
+							<div class="k">Deadman switch</div>
 							<div class="v"><span class="ic"></span><span>—</span></div>
 						</div>
 						<div class="tile" id="t-fsm" data-s="warning">
@@ -129,7 +129,7 @@
 						</div>
 						<div class="hints">
 							positions <b>WASD / ZQSD</b> (physiques, indépendantes du layout clavier) ·
-							<span class="kbd">Espace</span> homme-mort · <span class="kbd">X</span> arrêt ·
+							<span class="kbd">Espace</span> deadman switch · <span class="kbd">X</span> arrêt ·
 							<span class="kbd">R</span> réarmer · <span class="kbd">?</span> aide
 						</div>
 					</div>
@@ -232,8 +232,8 @@
 						</div>
 						<div class="field">
 							<label>Pas de la pince (boutons manette) <b data-out="control.gripStep">2 %</b></label>
-							<input type="range" data-cfg="control.gripStep" data-scale="100" data-unit=" %"
-								min="0.005" max="0.05" step="0.005">
+							<input type="range" data-cfg="control.gripStep" data-scale="100" data-unit=" %" min="0.005"
+								max="0.05" step="0.005">
 						</div>
 					</div>
 					<div class="pane" data-pane="joystick">
@@ -272,8 +272,7 @@
 						</div>
 						<div class="field">
 							<label>Marge aux butées <b data-out="gello.rangeMarginDeg">5°</b></label>
-							<input type="range" data-cfg="gello.rangeMarginDeg" data-unit="°" min="0" max="15"
-								step="1">
+							<input type="range" data-cfg="gello.rangeMarginDeg" data-unit="°" min="0" max="15" step="1">
 						</div>
 						<div class="field">
 							<label class="check"><input type="checkbox" data-cfg="gello.autoConnect">
@@ -324,7 +323,7 @@
 				<table class="help-table">
 					<tr>
 						<td><span class="kbd">Espace</span> (maintenu)</td>
-						<td>homme-mort — obligatoire pour bouger</td>
+						<td>deadman switch — obligatoire pour bouger</td>
 					</tr>
 					<tr>
 						<td><span class="kbd">W·Z</span> / <span class="kbd">S</span></td>

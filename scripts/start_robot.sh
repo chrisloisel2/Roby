@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Robot PC: start the robot agent, both camera publishers, and arm agent --
-# the full robot-side stack in one command.
+# Robot PC: start the robot agent, camera publisher, and arm agent -- the
+# full robot-side stack in one command.
 # Set OPERATOR_IP to the operator PC address, e.g.:
 #     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh
 #
@@ -8,12 +8,13 @@
 # still want the rest of the stack up rather than being blocked entirely by
 # the fail-fast checks below:
 #     NO_ARM=1      OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # base + caméras, pas de bras
-#     CAMERA_ONLY=1 scripts/start_robot.sh                              # caméras seules (pas d'OPERATOR_IP requis : ni l'un ni l'autre camera_pub*.py ne parle Zenoh)
+#     CAMERA_ONLY=1 scripts/start_robot.sh                              # caméras seules (pas d'OPERATOR_IP requis : camera_pub.py ne parle pas Zenoh)
 #
-# Both camera_pub.py (front HSTD) and insta360_pub.py (Insta360, USB webcam
-# mode) always run regardless of these flags -- same as each other, neither
-# is gated -- each on its own WebSocket port (8765 / 8766) and its own
-# process, so one camera failing never affects base/arm/the other camera.
+# camera_pub.py always runs regardless of these flags, same as before --
+# it now serves BOTH the front camera and an optional second UVC camera
+# over the SAME WebSocket connection/port (8765), not two separate
+# processes/ports -- see robot/camera_pub.py and robot/uvc_camera_server.py
+# for why (both cameras get identical connection-level treatment this way).
 #
 # Idempotent: kills any already-running instance of each component first, so
 # re-running this script never leaves duplicates racing each other over CAN
@@ -63,7 +64,6 @@ fi
 mkdir -p logs
 AGENT_LOG="logs/robot_agent.log"
 CAMERA_LOG="logs/camera_pub.log"
-INSTA360_LOG="logs/insta360_pub.log"
 ARM_LOG="logs/arm_agent.log"
 
 # Always use the dedicated .venv (created with --system-site-packages, see
@@ -120,7 +120,6 @@ stop_running() {
 
 stop_running "robot/robot_agent.py"
 stop_running "robot/camera_pub.py"
-stop_running "robot/insta360_pub.py"
 stop_running "robot/arm_agent.py"
 
 echo "start_robot.sh: RUN_BASE=$RUN_BASE RUN_ARM=$RUN_ARM -- logs dans logs/*.log" >&2
@@ -183,25 +182,6 @@ if ! kill -0 "$CAMERA_PID" 2>/dev/null; then
     exit 1
 fi
 echo "start_robot.sh: camera_pub.py démarré (pid $CAMERA_PID)." >&2
-
-# insta360_pub.py: same deal as camera_pub.py above, on port 8766 instead of
-# 8765 -- also always started (not gated by CAMERA_ONLY/NO_ARM, exactly
-# like camera_pub.py isn't). If the Insta360 itself isn't plugged in, this
-# process still comes up fine and just never gets a frame to send (see
-# logs/insta360_pub.log's own heartbeat/FATAL lines) -- it's only a hard
-# crash (bad import, port already in use) that aborts this script here.
-"$PY" -u robot/insta360_pub.py > "$INSTA360_LOG" 2>&1 &
-INSTA360_PID=$!
-PIDS+=("$INSTA360_PID")
-
-sleep 1
-if ! kill -0 "$INSTA360_PID" 2>/dev/null; then
-    echo "start_robot.sh: insta360_pub.py s'est arrêté immédiatement -- ABANDON." >&2
-    echo "  --- $INSTA360_LOG ---" >&2
-    cat "$INSTA360_LOG" >&2
-    exit 1
-fi
-echo "start_robot.sh: insta360_pub.py démarré (pid $INSTA360_PID)." >&2
 
 if [ "$RUN_ARM" = "1" ]; then
     echo "start_robot.sh: bras dégagé/soutenu ? connect() active le couple moteur immédiatement." >&2
