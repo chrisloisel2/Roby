@@ -1,14 +1,18 @@
-// GELLO leader arm over Web Serial (Arduino + 7 AS5600L sensors).
+// GELLO leader arm over Web Serial (Arduino + 7 AS5600L sensors, RAW firmware).
 //
 // Reproduces, in JS, exactly the serial read + calibration math of
 // operator/gello_reader.py (Python) -- same constants, same
 // gello_calibration.json file (fetched below) -- so the browser can read the
 // GELLO the same way it reads the gamepad (Gamepad API) and fully replace
-// input_agent.py as the normal command source.
+// input_agent.py as the normal command source. Both port lerobot's
+// GelloAs5600RawLeader teleoperator (see gello_reader.py's module docstring
+// for the corrected-2026-07-09 story: this file used to port the OTHER,
+// older GelloAs5600Leader class -- wrong firmware variant, no angle-unwrap,
+// wrong gripper scale -- for the physical GELLO this project now uses).
 //
 // Intentional mirror: if these constants change on the Python side
-// (config_gello_as5600_leader.py on the robot PC), port them here by hand --
-// there is no automatic sync between the two.
+// (config_gello_as5600_raw_leader.py on the robot PC), port them here by
+// hand -- there is no automatic sync between the two.
 //
 // The hardware truths (joint ids / directions / scales) are constants below;
 // the *tuning* knobs (baud rate, Arduino boot delay, smoothing, range margin,
@@ -26,11 +30,28 @@ const GELLO_JOINT_DIRECTIONS = {
 	shoulder_pan: -1, shoulder_lift: -1, elbow_flex: -1,
 	wrist_flex: 1, wrist_yaw: -1, wrist_roll: -1, gripper: -1,
 };
+// gripper: 2.3 (config_gello_as5600_raw_leader.py's default), NOT 3.4 --
+// that was the OLD (non-raw) class's default, ported here by mistake
+// before 2026-07-09.
 const GELLO_JOINT_SCALES = {
 	shoulder_pan: 1.0, shoulder_lift: 1.0, elbow_flex: 1.0,
-	wrist_flex: 1.0, wrist_yaw: 1.0, wrist_roll: 1.0, gripper: 3.4,
+	wrist_flex: 1.0, wrist_yaw: 1.0, wrist_roll: 1.0, gripper: 2.3,
 };
 const GELLO_LINE_RE = /J(\d+):(-?\d+\.\d+|ERR)/g;
+
+// Ported byte-for-byte from GelloAs5600RawLeader._unwrap_toward(): the RAW
+// firmware streams absolute sensor angles in [0, 360), so when a joint
+// crosses the 0/360 seam the raw value jumps by 360 -- without this, that
+// jump goes straight through the smoothing filter and out the other side
+// as a ~360deg commanded lunge. Tracking continuity against the previous
+// (or calibration-reference) value removes it, as long as the true motion
+// between two samples stays below 180deg -- guaranteed at the firmware's
+// ~60Hz streaming rate.
+function unwrapToward(angleDeg, anchorDeg) {
+	while (angleDeg - anchorDeg > 180.0) angleDeg -= 360.0;
+	while (angleDeg - anchorDeg < -180.0) angleDeg += 360.0;
+	return angleDeg;
+}
 
 export function initGello() {
 	const $ = (id) => document.getElementById(id);
@@ -100,30 +121,41 @@ export function initGello() {
 		});
 	}
 
-	// Reproduces GelloReader.get_action() (operator/gello_reader.py): clip to
-	// measured limits (±margin) -> exponential smoothing -> direction -> scale
-	// -> offset.
+	// Reproduces GelloAs5600RawLeader.get_action() (see gello_reader.py,
+	// ported the same way): unwrap the 0/360 seam -> clip to measured limits
+	// (±margin) -> exponential smoothing -> direction -> scale -> offset.
 	//
-	// The smoothing step runs HERE, once per raw serial line (~60Hz, the
-	// GELLO firmware's own streaming rate) -- NOT inside computeAction() below.
-	// It used to: computeAction() was only called once per control tick
-	// (control.rateHz, 20Hz by default), so the exponential filter only ever
-	// advanced 20 times/s instead of 60, which -- for a first-order EMA --
-	// directly stretches its settling time by the same factor (roughly 300ms
-	// becomes ~1s to reach 95% of a step change). Coupling "how often do we
-	// smooth" to "how often do we publish over the network" made the arm feel
-	// laggy independently of any real network/CAN latency (measured ~1.2ms
-	// round-trip on this hardware -- not the bottleneck). Filtering at the
-	// sensor's native rate and simply publishing whatever the filter's latest
-	// output is, at whatever rate control.rateHz allows, decouples the two.
+	// The unwrap+smoothing step runs HERE, once per raw serial line (~60Hz,
+	// the GELLO firmware's own streaming rate) -- NOT inside computeAction()
+	// below. It used to: computeAction() was only called once per control
+	// tick (control.rateHz, 20Hz by default), so the exponential filter only
+	// ever advanced 20 times/s instead of 60, which -- for a first-order EMA
+	// -- directly stretches its settling time by the same factor (roughly
+	// 300ms becomes ~1s to reach 95% of a step change). Coupling "how often
+	// do we smooth" to "how often do we publish over the network" made the
+	// arm feel laggy independently of any real network/CAN latency (measured
+	// ~1.2ms round-trip on this hardware -- not the bottleneck). Filtering
+	// at the sensor's native rate and simply publishing whatever the
+	// filter's latest output is, at whatever rate control.rateHz allows,
+	// decouples the two.
 	function updateFiltered(jid, raw) {
 		if (!gelloCalibration) return;
 		const name = GELLO_JOINT_NAME_BY_ID[jid];
 		const calib = name && gelloCalibration[name];
 		if (!calib) return;
-		const margin = config.get("gello.rangeMarginDeg");
-		const clipped = Math.max(calib.range_min - margin, Math.min(calib.range_max + margin, raw));
 		const prev = gelloFiltered[name];
+
+		const direction = GELLO_JOINT_DIRECTIONS[name];
+		const offsetDeg = calib.homing_offset / 100.0;  // stored in centidegrees
+		// offsetDeg = -direction * rawRef (see computeAction()'s comment
+		// below), so rawRef = -offsetDeg * direction -- the calibration-time
+		// reading, used as the unwrap anchor until a live filtered value
+		// exists.
+		const rawRef = -offsetDeg * direction;
+		const anchor = prev == null ? rawRef : prev;
+		const unwrapped = unwrapToward(raw, anchor);
+		const margin = config.get("gello.rangeMarginDeg");
+		const clipped = Math.max(calib.range_min - margin, Math.min(calib.range_max + margin, unwrapped));
 		const smoothing = config.get("gello.smoothing");
 		gelloFiltered[name] = (prev == null) ? clipped : prev + smoothing * (clipped - prev);
 	}
@@ -196,12 +228,11 @@ export function initGello() {
 				productId: info.usbProductId ?? -1,
 			});
 			// Opening the port resets the Arduino (DTR) -- let the firmware boot
-			// before writing, same delay as gello_reader.py (Python), so we don't
-			// land on the recalibration prompt.
+			// before reading, same delay as gello_reader.py (Python). The RAW
+			// firmware has no serial command interface (no zero/recalibrate
+			// prompt to answer, unlike the older EEPROM-zeroed GELLO firmware)
+			// -- it just starts streaming, so there's nothing to write here.
 			await new Promise((r) => setTimeout(r, config.get("gello.bootDelayMs")));
-			const writer = port.writable.getWriter();
-			await writer.write(new TextEncoder().encode("n\n"));
-			writer.releaseLock();
 			gelloStatusName.textContent = "— connecté";
 			toast("GELLO connecté (" + portLabel(port) + ")", "good");
 			refreshKnownPorts();

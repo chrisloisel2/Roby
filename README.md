@@ -257,10 +257,14 @@ Points clés :
   défaut, `arm_agent.py` ne démarrera pas sans.
 - **`gello_reader.py` ne dépend pas de lerobot** : réimplémentation autonome
   (pyserial) de la lecture série + de la formule de calibration de
-  `GelloAs5600Leader.get_action()` (lissage -> clip aux butées -> sens ->
-  échelle -> offset), avec les mêmes constantes et le même fichier de
-  calibration déjà mesuré (`operator/gello_calibration.json`, copie de
-  `mon_gello.json`). Nécessite `GELLO_PORT` (variable d'env, ex.
+  `GelloAs5600RawLeader.get_action()` (dépliage de la couture 0/360° ->
+  lissage -> clip aux butées -> sens -> échelle -> offset -- même classe que
+  `start_teleoperation.py`, PAS `GelloAs5600Leader`/"non-raw", une classe
+  différente pour un autre firmware GELLO ; confondre les deux a causé un
+  vrai bug -- mouvement erratique, cf. commit 2026-07-09), avec les mêmes
+  constantes et le même fichier de calibration déjà mesuré
+  (`operator/gello_calibration.json`, copie du fichier RAW déjà présent sur
+  le PC robot). Nécessite `GELLO_PORT` (variable d'env, ex.
   `/dev/tty.usbserial-XXXX` sur macOS) — sans elle, désactivé proprement (pas
   d'auto-probe : le mauvais port série n'est pas un risque à prendre).
   `input_agent.py` a aussi besoin de `ROBOT_IP` (IP directe du PC robot, pas

@@ -1,30 +1,49 @@
 #!/usr/bin/env python3
-"""GELLO leader arm reader (Arduino + 7x AS5600L magnetic encoders).
+"""GELLO leader arm reader (Arduino + 7x AS5600L magnetic encoders, RAW firmware).
 
-Standalone reimplementation of lerobot's `GelloAs5600Leader` teleoperator
+Standalone reimplementation of lerobot's `GelloAs5600RawLeader` teleoperator
 (see `~/03_JelloSoft/rebot_lerobot/lerobot/src/lerobot/teleoperators/
-gello_as5600_leader/` on the robot PC) that doesn't depend on the lerobot
-package -- that package pulls in heavy deps (torch etc.) that have no
-business being on the operator PC just to read a serial port. This file
-ports only the reading + calibration math, byte for byte, from that class.
+gello_as5600_raw_leader/` on the robot PC -- the same one
+`~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py` uses) that
+doesn't depend on the lerobot package -- that package pulls in heavy deps
+(torch etc.) that have no business being on the operator PC just to read a
+serial port. This file ports only the reading + calibration math, byte for
+byte, from that class.
 
-The GELLO firmware streams plain ASCII over serial, one line every ~16ms:
+CORRECTED 2026-07-09: this file used to port `GelloAs5600Leader` (note: NOT
+"Raw") instead -- the OTHER, older GELLO teleoperator class, for a
+DIFFERENT firmware variant (its own EEPROM zero, signed [-180,180) output,
+a serial handshake). The physical GELLO on this project now runs the RAW
+firmware, and porting the wrong class's math produced real, visible bugs:
+no angle-unwrap step (any joint crossing the 0/360 seam produced a sudden
+~360deg computed jump -- looked like "the arm moves erratically, nothing
+like what the GELLO is doing"), and a wrong gripper scale constant (3.4,
+the old class's default, vs 2.3 here). `gello_calibration.json` was also
+regenerated from the RAW-firmware calibration file already on the robot PC
+(`~/.cache/huggingface/lerobot/calibration/teleoperators/
+gello_as5600_raw_leader/mon_gello.json`) -- the OLD class's calibration
+file the previous copy came from is numerically incompatible (homing_offset
+scaled by roughly 100x smaller, since it's signed-degrees-from-an-EEPROM-
+zero instead of unwrapped absolute degrees).
+
+The RAW GELLO firmware streams plain ASCII over serial, one line every
+~16ms:
 
     t<ms> J1:<deg> J2:<deg> ... J7:<deg>
 
-<deg> is signed in [-180, 180), relative to the firmware's own zero ("arm
-fully straight") -- unrelated to the follower's calibrated zero, which is
-why the offset/scale/direction transform below exists. A sensor read
-failure prints "ERR" for that joint; we keep the last valid value instead of
-snapping to 0.
+<deg> is the ABSOLUTE sensor angle in [0, 360) -- no firmware zero, no
+serial command interface. Angles wrap at the 0/360 seam; _unwrap_toward()
+below removes that seam by tracking continuity against the previous (or
+calibration-reference) reading, same as the lerobot class does, before the
+offset/scale/direction transform is applied. A sensor read failure prints
+"ERR" for that joint; we keep the last valid value instead of snapping to 0.
 
 `gello_calibration.json` (this directory) is a copy of the calibration file
-already generated on the robot PC by GelloAs5600Leader.calibrate() (3-step
-process: firmware zero, range-of-motion sweep, alignment with the
-follower's resting pose). It's tied to the physical GELLO unit and its
-firmware EEPROM zero, not to which machine reads the serial port, so it
-stays valid unchanged even though the reading moved from the robot PC to
-here (the operator PC).
+already generated on the robot PC by GelloAs5600RawLeader.calibrate()
+(range-of-motion sweep + alignment with the follower's resting pose,
+tracked in the unwrapped frame). It's tied to the physical GELLO unit, not
+to which machine reads the serial port, so it stays valid unchanged even
+though the reading moved from the robot PC to here (the operator PC).
 """
 import json
 import os
@@ -40,7 +59,7 @@ BAUDRATE = 115200
 CALIBRATION_PATH = Path(__file__).resolve().parent / "gello_calibration.json"
 
 # Follower joint name -> leader sensor ID (firmware J<n>). Matches
-# config_gello_as5600_leader.py on the robot PC.
+# config_gello_as5600_raw_leader.py on the robot PC.
 JOINT_IDS = {
     "shoulder_pan": 1,
     "shoulder_lift": 2,
@@ -54,7 +73,7 @@ JOINT_NAME_BY_ID = {jid: name for name, jid in JOINT_IDS.items()}
 
 # Sign applied to each sensor's raw angle to match the follower's
 # convention. Determined empirically on this hardware (config_gello_as5600_
-# leader.py); do not change without re-verifying against the robot PC.
+# raw_leader.py); do not change without re-verifying against the robot PC.
 JOINT_DIRECTIONS = {
     "shoulder_pan": -1,
     "shoulder_lift": -1,
@@ -66,8 +85,11 @@ JOINT_DIRECTIONS = {
 }
 
 # follower_deg = scale * leader_deg. 1.0 everywhere except the gripper: its
-# trigger travels less than the follower gripper's range (~116deg measured
-# -> 270deg), so the scale amplifies it.
+# trigger travels less than the follower gripper's range, so the scale
+# amplifies it -- 2.3, matching config_gello_as5600_raw_leader.py's default
+# (~270deg follower range / measured trigger course). NOT 3.4 -- that was
+# the OLD (non-raw) class's default, ported here by mistake before
+# 2026-07-09.
 JOINT_SCALES = {
     "shoulder_pan": 1.0,
     "shoulder_lift": 1.0,
@@ -75,7 +97,7 @@ JOINT_SCALES = {
     "wrist_flex": 1.0,
     "wrist_yaw": 1.0,
     "wrist_roll": 1.0,
-    "gripper": 3.4,
+    "gripper": 2.3,
 }
 
 LEADER_SMOOTH = 0.15  # exponential smoothing, anti-tremor (0=very smooth/laggy, 1=raw)
@@ -83,6 +105,24 @@ RANGE_SAFETY_MARGIN_DEG = 5.0  # clip raw sensor glitches to measured range +/- 
 FIRMWARE_RESET_SETTLE_SEC = 2.5  # opening the port resets the Arduino (DTR)
 
 _JOINT_LINE_RE = re.compile(r"J(\d+):(-?\d+\.\d+|ERR)")
+
+
+def _unwrap_toward(angle_deg: float, anchor_deg: float) -> float:
+    """Shift angle_deg by multiples of 360 so it lands within +/-180 of
+    anchor_deg. Ported byte-for-byte from GelloAs5600RawLeader's
+    _unwrap_toward(): the RAW firmware streams absolute sensor angles in
+    [0, 360), so when a joint crosses the 0/360 seam the raw value jumps by
+    360 -- without this, that jump goes straight into the smoothing filter
+    and out the other side as a ~360deg commanded lunge. Tracking
+    continuity against the previous (or calibration-reference) value
+    removes it, as long as the true motion between two samples stays below
+    180deg -- guaranteed at the firmware's ~60Hz streaming rate.
+    """
+    while angle_deg - anchor_deg > 180.0:
+        angle_deg -= 360.0
+    while angle_deg - anchor_deg < -180.0:
+        angle_deg += 360.0
+    return angle_deg
 
 
 def _load_calibration() -> dict:
@@ -93,17 +133,18 @@ def _load_calibration() -> dict:
 class GelloReader:
     """Background serial reader + lerobot-compatible calibration transform.
 
-    Reproduces GelloAs5600Leader.get_action() (clip to measured range ->
-    exponential smoothing -> sign -> scale -> offset) so the numbers match
-    what the follower already expects, without needing a live connection to
-    the follower itself (the offset was fixed once at calibration time).
+    Reproduces GelloAs5600RawLeader.get_action() (unwrap -> clip to measured
+    range -> exponential smoothing -> sign -> scale -> offset) so the
+    numbers match what the follower already expects, without needing a live
+    connection to the follower itself (the offset was fixed once at
+    calibration time).
 
-    The clip+smoothing step runs in the background reader thread (_run),
-    once per raw serial line -- i.e. at the GELLO firmware's own streaming
-    rate (~60Hz, one line every ~16ms) -- NOT inside get_action(). It used
-    to run inside get_action() instead, so the exponential filter only
-    advanced as often as the caller polled it (input_agent.py: 50Hz: not
-    far off here, but the standalone `python gello_reader.py` test loop
+    The unwrap+clip+smoothing step runs in the background reader thread
+    (_run), once per raw serial line -- i.e. at the GELLO firmware's own
+    streaming rate (~60Hz, one line every ~16ms) -- NOT inside get_action().
+    It used to run inside get_action() instead, so the exponential filter
+    only advanced as often as the caller polled it (input_agent.py: 50Hz:
+    not far off here, but the standalone `python gello_reader.py` test loop
     below only polls at 20Hz, and the browser's equivalent, static/js/
     gello.js, defaults to 20Hz too) -- for a first-order EMA, a slower
     advance rate directly stretches wall-clock settling time by the same
@@ -120,14 +161,12 @@ class GelloReader:
         self._filtered: dict[str, float | None] = dict.fromkeys(JOINT_IDS.keys(), None)
         self._stop = threading.Event()
 
-        # Opening the port resets the Arduino (DTR); let the firmware boot,
-        # then answer "n" to its recalibrate prompt so we don't wait out its
-        # ~30s timeout. Only the reading side moved machines -- the physical
-        # GELLO and its firmware EEPROM zero didn't -- so we deliberately
-        # keep the existing calibration instead of re-triggering it.
+        # Opening the port resets the Arduino (DTR); let the firmware boot
+        # before reading. The RAW firmware has no serial command interface
+        # (no zero/recalibrate prompt to answer, unlike the older
+        # EEPROM-zeroed GELLO firmware) -- it just starts streaming.
         time.sleep(FIRMWARE_RESET_SETTLE_SEC)
         self.ser.reset_input_buffer()
-        self.ser.write(b"n\n")
 
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -152,17 +191,29 @@ class GelloReader:
                     self._raw[jid] = value = float(val_s)
                     name = JOINT_NAME_BY_ID.get(jid)
                     calib = self._calibration.get(name) if name else None
+                    prev = self._filtered.get(name)
+
                     if calib is not None:
+                        direction = JOINT_DIRECTIONS[name]
+                        offset_deg = calib["homing_offset"] / 100.0  # stored in centidegrees
+                        # offset_deg = -direction * raw_ref (see get_action()'s
+                        # comment below), so raw_ref = -offset_deg * direction --
+                        # the calibration-time reading, used as the unwrap anchor
+                        # until a live filtered value exists.
+                        raw_ref = -offset_deg * direction
+                        anchor = prev if prev is not None else raw_ref
+                        value = _unwrap_toward(value, anchor)
                         lo, hi = calib["range_min"], calib["range_max"]
                         value = max(lo - RANGE_SAFETY_MARGIN_DEG, min(hi + RANGE_SAFETY_MARGIN_DEG, value))
-                    prev = self._filtered.get(name)
+
                     self._filtered[name] = value if prev is None else prev + LEADER_SMOOTH * (value - prev)
 
     def get_action(self) -> dict[str, float]:
         """Return {joint_name: calibrated_follower_degrees} for whichever
-        joints already have a valid (clipped + smoothed, see _run above)
-        reading. Right after startup this is naturally a partial dict -- an
-        omitted key means "no update yet", never a fabricated 0.0."""
+        joints already have a valid (unwrapped + clipped + smoothed, see
+        _run above) reading. Right after startup this is naturally a
+        partial dict -- an omitted key means "no update yet", never a
+        fabricated 0.0."""
         action: dict[str, float] = {}
         for name in JOINT_IDS:
             calib = self._calibration.get(name)
