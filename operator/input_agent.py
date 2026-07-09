@@ -22,13 +22,18 @@ Base command contract: vx / vy / wz are normalized to [-1, 1]; vx=forward,
 vy=lateral (right +), wz=rotation. The robot agent mixes these into mecanum
 wheel targets and scales by its own MAX_VEL/ROT_VEL.
 
-Arm (GELLO) commands go DIRECTLY to robot/arm_agent.py's own WebSocket
+GELLO data goes DIRECTLY to robot/arm_agent.py's own WebSocket
 (ws://<robot-ip>:8767), NOT over Zenoh -- same change as the browser's own
-GELLO path (operator/web/static/js/armLink.js), for the same reason: one
-fewer hop, and arm_agent.py no longer has a robot/cmd/arm Zenoh subscriber
-at all. Requires ROBOT_IP (the robot PC's address, not Zenoh-routed) --
-only enforced once a GELLO is actually detected, so joystick-only base
-control still works with no GELLO and no ROBOT_IP set.
+GELLO path (operator/web/static/js/armLink.js + gello.js), for the same
+reason: one fewer hop, and arm_agent.py no longer has a robot/cmd/arm
+Zenoh subscriber at all. What's relayed is the RAW, unprocessed GELLO
+serial line -- gello_reader.py does no calibration math (see its module
+docstring for why: a hand-ported reimplementation of that math had a real
+bug once already). arm_agent.py runs the actual lerobot
+GelloAs5600RawLeader class server-side instead. Requires ROBOT_IP (the
+robot PC's address, not Zenoh-routed) -- only enforced once a GELLO is
+actually detected, so joystick-only base control still works with no
+GELLO and no ROBOT_IP set.
 """
 import json
 import math
@@ -63,13 +68,12 @@ STICK_X_INVERT = False
 DEADZONE = 0.25           # stick: below this magnitude -> STOP, not drift
 ROTATION_DEADZONE = 0.15  # twist axis: below this -> no rotation, not drift
 
-# GELLO integration point. Provide a reader that returns a dict like:
-#   {"joints": {name: deg, ...}, "gripper": float, "mode": "joint_position"}
-# or None when no GELLO is connected. Left as a stub for now.
+# GELLO integration point. Provide a reader that returns the latest raw
+# GELLO firmware line (str, untouched) or None when no GELLO is connected.
 try:
-    from gello_reader import read_gello  # type: ignore
+    from gello_reader import read_gello_raw_line  # type: ignore
 except ImportError:
-    def read_gello():
+    def read_gello_raw_line():
         return None
 
 
@@ -132,7 +136,7 @@ class ArmLink:
         self._ws = None
         self._last_attempt = 0.0
 
-    def send(self, cmd: dict) -> None:
+    def send_raw_line(self, line: str) -> None:
         if self._ws is None:
             now = time.time()
             if now - self._last_attempt < ARM_RECONNECT_INTERVAL:
@@ -145,7 +149,7 @@ class ArmLink:
                 print(f"[input_agent] arm link connect failed ({self.url}): {exc}")
                 return
         try:
-            self._ws.send(json.dumps(cmd))
+            self._ws.send(json.dumps({"raw": line}))
         except Exception as exc:
             print(f"[input_agent] arm link send failed: {exc}")
             self.close()
@@ -195,8 +199,8 @@ def main() -> None:
                 # hands, so requiring the joystick button held at the same
                 # time isn't workable. Safety for the arm instead comes from
                 # the robot-side watchdog on the arm link's freshness.
-                gello = read_gello()
-                if gello is not None:
+                gello_line = read_gello_raw_line()
+                if gello_line is not None:
                     if arm_link is None:
                         robot_ip = os.environ.get("ROBOT_IP")
                         if robot_ip:
@@ -207,7 +211,7 @@ def main() -> None:
                                   "enable arm teleop.", flush=True)
                             warned_no_robot_ip = True
                     if arm_link is not None:
-                        arm_link.send(gello)
+                        arm_link.send_raw_line(gello_line)
 
                 if not deadman:
                     pub_base.put(json.dumps({"vx": 0.0, "vy": 0.0, "wz": 0.0}))

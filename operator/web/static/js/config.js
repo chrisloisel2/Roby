@@ -19,12 +19,13 @@ export const DEFAULTS = Object.freeze({
 	version: 2,
 	control: {
 		// Matches arm_agent.py's own 50Hz control loop and stays well under
-		// the robot watchdog's CMD_TIMEOUT_SEC (0.3s base / 0.3s arm). Used to
-		// default to 20Hz, which capped how often a GELLO-driven arm target
-		// could even be relayed -- now that GELLO's smoothing filter runs at
-		// the sensor's native ~60Hz (see static/js/gello.js) instead of at
-		// this rate, there's no reason left to hold the relay rate down; the
-		// base's own loop (100Hz, robot_agent.py) has plenty of headroom too.
+		// the robot watchdog's CMD_TIMEOUT_SEC (0.3s base / 0.3s arm). Only
+		// governs base (vx/vy/wz + deadman) now -- GELLO relaying moved off
+		// this tick entirely (gello.js sends raw lines straight from its own
+		// serial read loop, ~60Hz, whenever they arrive; see gello.js). Used
+		// to default to 20Hz, which used to also cap the GELLO relay rate
+		// before that decoupling; the base's own loop (100Hz, robot_agent.py)
+		// has plenty of headroom at 50Hz either way.
 		rateHz: 50,
 
 		defaultSpeed: 0.6,
@@ -49,8 +50,10 @@ export const DEFAULTS = Object.freeze({
 	gello: {
 		baudRate: 115200,
 		bootDelayMs: 2500,   // opening the port resets the Arduino (DTR) — same wait as gello_reader.py
-		smoothing: 0.15,
-		rangeMarginDeg: 5,
+		// No smoothing/rangeMarginDeg here anymore (2026-07-09): calibration
+		// (including smoothing) now runs server-side in arm_agent.py's real
+		// lerobot GelloAs5600RawLeader instance, not in this file -- see
+		// gello.js's module docstring.
 		autoConnect: false,
 		// USB ids of the last successfully-opened port, so autoConnect can find
 		// the same device again among the already-authorized ports (-1 = none).

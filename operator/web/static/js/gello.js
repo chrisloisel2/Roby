@@ -1,23 +1,22 @@
 // GELLO leader arm over Web Serial (Arduino + 7 AS5600L sensors, RAW firmware).
 //
-// Reproduces, in JS, exactly the serial read + calibration math of
-// operator/gello_reader.py (Python) -- same constants, same
-// gello_calibration.json file (fetched below) -- so the browser can read the
-// GELLO the same way it reads the gamepad (Gamepad API) and fully replace
-// input_agent.py as the normal command source. Both port lerobot's
-// GelloAs5600RawLeader teleoperator (see gello_reader.py's module docstring
-// for the corrected-2026-07-09 story: this file used to port the OTHER,
-// older GelloAs5600Leader class -- wrong firmware variant, no angle-unwrap,
-// wrong gripper scale -- for the physical GELLO this project now uses).
+// Reads the GELLO's raw serial stream and relays each line, UNPROCESSED,
+// straight to robot/arm_agent.py over armLink.js -- no calibration math
+// happens in the browser. arm_agent.py feeds each line into a REAL lerobot
+// GelloAs5600RawLeader instance and calls its own get_action(), so
+// calibration (unwrap the 0/360 seam, clip to measured range, smooth,
+// direction/scale/offset) happens in exactly the ONE place that runs the
+// real, authoritative lerobot code -- not a hand-ported reimplementation
+// here. An earlier version of this file DID reimplement that math
+// client-side, and had a real bug (ported the wrong lerobot teleoperator
+// class entirely, no angle-unwrap -- see robot/arm_agent.py's module
+// docstring for the full story); relaying raw data removes that whole
+// class of bug for good.
 //
-// Intentional mirror: if these constants change on the Python side
-// (config_gello_as5600_raw_leader.py on the robot PC), port them here by
-// hand -- there is no automatic sync between the two.
-//
-// The hardware truths (joint ids / directions / scales) are constants below;
-// the *tuning* knobs (baud rate, Arduino boot delay, smoothing, range margin,
-// auto-reconnect) live in the central config store, adjustable from the
-// settings panel.
+// Relaying happens directly from the serial read loop below (as fast as
+// the firmware streams, ~60Hz), NOT from control.js's tick() -- decoupled
+// from control.rateHz entirely now that there's no smoothing filter here
+// whose settling time that rate could stretch.
 
 import { config } from "./config.js";
 import { toast } from "./toast.js";
@@ -26,44 +25,17 @@ const GELLO_JOINT_IDS = {
 	shoulder_pan: 1, shoulder_lift: 2, elbow_flex: 3,
 	wrist_flex: 4, wrist_yaw: 5, wrist_roll: 6, gripper: 7,
 };
-const GELLO_JOINT_DIRECTIONS = {
-	shoulder_pan: -1, shoulder_lift: -1, elbow_flex: -1,
-	wrist_flex: 1, wrist_yaw: -1, wrist_roll: -1, gripper: -1,
-};
-// gripper: 2.3 (config_gello_as5600_raw_leader.py's default), NOT 3.4 --
-// that was the OLD (non-raw) class's default, ported here by mistake
-// before 2026-07-09.
-const GELLO_JOINT_SCALES = {
-	shoulder_pan: 1.0, shoulder_lift: 1.0, elbow_flex: 1.0,
-	wrist_flex: 1.0, wrist_yaw: 1.0, wrist_roll: 1.0, gripper: 2.3,
-};
+const GELLO_JOINT_NAME_BY_ID = Object.fromEntries(
+	Object.entries(GELLO_JOINT_IDS).map(([name, jid]) => [jid, name]));
 const GELLO_LINE_RE = /J(\d+):(-?\d+\.\d+|ERR)/g;
 
-// Ported byte-for-byte from GelloAs5600RawLeader._unwrap_toward(): the RAW
-// firmware streams absolute sensor angles in [0, 360), so when a joint
-// crosses the 0/360 seam the raw value jumps by 360 -- without this, that
-// jump goes straight through the smoothing filter and out the other side
-// as a ~360deg commanded lunge. Tracking continuity against the previous
-// (or calibration-reference) value removes it, as long as the true motion
-// between two samples stays below 180deg -- guaranteed at the firmware's
-// ~60Hz streaming rate.
-function unwrapToward(angleDeg, anchorDeg) {
-	while (angleDeg - anchorDeg > 180.0) angleDeg -= 360.0;
-	while (angleDeg - anchorDeg < -180.0) angleDeg += 360.0;
-	return angleDeg;
-}
-
-export function initGello() {
+export function initGello({ armLink }) {
 	const $ = (id) => document.getElementById(id);
 	const gelloHead = $("gelloHead"), gelloBody = $("gelloBody"), gelloChevron = $("gelloChevron");
 	const gelloStatusName = $("gelloStatusName"), gelloRawEl = $("gelloRaw"), gelloKnownPortsEl = $("gelloKnownPorts");
 
-	let gelloCalibration = null;
 	let gelloConnected = false;
 	let gelloActivePort = null;
-	const gelloFiltered = {};   // joint name -> smoothed value (before direction/scale/offset)
-	const GELLO_JOINT_NAME_BY_ID = Object.fromEntries(
-		Object.entries(GELLO_JOINT_IDS).map(([name, jid]) => [jid, name]));
 
 	gelloHead.addEventListener("click", () => {
 		const open = gelloBody.classList.toggle("open");
@@ -121,61 +93,20 @@ export function initGello() {
 		});
 	}
 
-	// Reproduces GelloAs5600RawLeader.get_action() (see gello_reader.py,
-	// ported the same way): unwrap the 0/360 seam -> clip to measured limits
-	// (±margin) -> exponential smoothing -> direction -> scale -> offset.
-	//
-	// The unwrap+smoothing step runs HERE, once per raw serial line (~60Hz,
-	// the GELLO firmware's own streaming rate) -- NOT inside computeAction()
-	// below. It used to: computeAction() was only called once per control
-	// tick (control.rateHz, 20Hz by default), so the exponential filter only
-	// ever advanced 20 times/s instead of 60, which -- for a first-order EMA
-	// -- directly stretches its settling time by the same factor (roughly
-	// 300ms becomes ~1s to reach 95% of a step change). Coupling "how often
-	// do we smooth" to "how often do we publish over the network" made the
-	// arm feel laggy independently of any real network/CAN latency (measured
-	// ~1.2ms round-trip on this hardware -- not the bottleneck). Filtering
-	// at the sensor's native rate and simply publishing whatever the
-	// filter's latest output is, at whatever rate control.rateHz allows,
-	// decouples the two.
-	function updateFiltered(jid, raw) {
-		if (!gelloCalibration) return;
-		const name = GELLO_JOINT_NAME_BY_ID[jid];
-		const calib = name && gelloCalibration[name];
-		if (!calib) return;
-		const prev = gelloFiltered[name];
-
-		const direction = GELLO_JOINT_DIRECTIONS[name];
-		const offsetDeg = calib.homing_offset / 100.0;  // stored in centidegrees
-		// offsetDeg = -direction * rawRef (see computeAction()'s comment
-		// below), so rawRef = -offsetDeg * direction -- the calibration-time
-		// reading, used as the unwrap anchor until a live filtered value
-		// exists.
-		const rawRef = -offsetDeg * direction;
-		const anchor = prev == null ? rawRef : prev;
-		const unwrapped = unwrapToward(raw, anchor);
-		const margin = config.get("gello.rangeMarginDeg");
-		const clipped = Math.max(calib.range_min - margin, Math.min(calib.range_max + margin, unwrapped));
-		const smoothing = config.get("gello.smoothing");
-		gelloFiltered[name] = (prev == null) ? clipped : prev + smoothing * (clipped - prev);
-	}
-
-	// Called once per control tick: just reads the already-filtered values
-	// (see updateFiltered above) and applies direction/scale/offset. Omits a
-	// key until a valid reading arrived for that joint (never a fabricated 0.0).
-	function computeAction() {
-		if (!gelloCalibration) return null;
-		const action = {};
-		for (const name of Object.keys(GELLO_JOINT_IDS)) {
-			const filtered = gelloFiltered[name];
-			const calib = gelloCalibration[name];
-			if (filtered == null || !calib) continue;
-			const direction = GELLO_JOINT_DIRECTIONS[name];
-			const scale = GELLO_JOINT_SCALES[name] ?? 1.0;
-			const offsetDeg = calib.homing_offset / 100.0;  // stored in centidegrees
-			action[name] = scale * (direction * filtered + offsetDeg);
+	// Raw-value readout only (no calibration applied) -- just live
+	// confirmation the GELLO is connected and moving. Joint names are
+	// looked up for readability; the actual value sent to arm_agent.py is
+	// the untouched line, not this parsed/relabeled version.
+	function showRawLine(line) {
+		const parts = [];
+		GELLO_LINE_RE.lastIndex = 0;
+		let m;
+		while ((m = GELLO_LINE_RE.exec(line))) {
+			if (m[2] === "ERR") continue;
+			const name = GELLO_JOINT_NAME_BY_ID[parseInt(m[1], 10)] ?? `J${m[1]}`;
+			parts.push(`${name}:${parseFloat(m[2]).toFixed(1)}°`);
 		}
-		return Object.keys(action).length ? action : null;
+		if (parts.length) gelloRawEl.textContent = parts.join("  ") + "  (brut, non calibré)";
 	}
 
 	async function readLoop(port) {
@@ -192,11 +123,14 @@ export function initGello() {
 				while ((idx = buf.indexOf("\n")) >= 0) {
 					const line = buf.slice(0, idx);
 					buf = buf.slice(idx + 1);
-					GELLO_LINE_RE.lastIndex = 0;
-					let m;
-					while ((m = GELLO_LINE_RE.exec(line))) {
-						if (m[2] === "ERR") continue;
-						updateFiltered(parseInt(m[1], 10), parseFloat(m[2]));
+					showRawLine(line);
+					// Gated the same way the old computeAction()->armLink.sendJoints()
+					// path was: only relay to the robot when the operator has
+					// explicitly opted into browser control (see control.js) --
+					// otherwise a connected-but-not-driving GELLO would still spam
+					// arm_agent.py and fight whatever else is in control.
+					if (config.get("control.browserControl")) {
+						armLink.sendRawLine(line);
 					}
 				}
 			}
@@ -215,9 +149,6 @@ export function initGello() {
 	// the browser's native selector (requestPort()).
 	async function connectToPort(port) {
 		try {
-			if (!gelloCalibration) {
-				gelloCalibration = await (await fetch("/gello_calibration.json")).json();
-			}
 			await port.open({ baudRate: config.get("gello.baudRate") });
 			gelloActivePort = port;
 			gelloConnected = true;
@@ -289,11 +220,6 @@ export function initGello() {
 	autoConnect();
 
 	return {
-		computeAction,
 		isConnected: () => gelloConnected,
-		showAction(action) {
-			gelloRawEl.textContent = Object.entries(action)
-				.map(([k, v]) => `${k}:${v.toFixed(1)}°`).join("  ");
-		},
 	};
 }

@@ -15,7 +15,7 @@ const KEYMAP = {
 	ArrowUp: "fwd", ArrowDown: "back", ArrowLeft: "rotL", ArrowRight: "rotR",
 };
 
-export function initControl({ onFullscreen, armLink }) {
+export function initControl({ onFullscreen }) {
 	const $ = (id) => document.getElementById(id);
 	const ctrlSock = createSocket("/ws/control");
 
@@ -167,7 +167,7 @@ export function initControl({ onFullscreen, armLink }) {
 
 	// ---- Control loop, rate configurable (restarted when rateHz changes) ----
 	let loopTimer = 0;
-	function start({ joystick, gello }) {
+	function start({ joystick }) {
 		const tick = () => {
 			// The base command send below is safety-relevant (the robot-side
 			// watchdog stops on stale commands): a crash in an input source
@@ -201,28 +201,11 @@ export function initControl({ onFullscreen, armLink }) {
 			dm.classList.toggle("armed", activeDeadman);
 			setTile("t-dead", activeDeadman ? "good" : "warning", activeDeadman ? "ARMÉ" : "RELÂCHÉ");
 
-			// GELLO: no deadman here (driving a 7-DOF arm takes both hands) --
-			// gated only by the "Piloter depuis ce navigateur" toggle, same
-			// principle as operator/input_agent.py which publishes the arm
-			// independently of the base deadman.
-			try {
-				if (gello.isConnected()) {
-					const action = gello.computeAction();
-					if (action) {
-						gello.showAction(action);
-						if (browserControlEnabled) {
-							const grip = action.gripper;
-							const joints = { ...action };
-							delete joints.gripper;
-							// Direct WebSocket to arm_agent.py (armLink.js), NOT
-							// ctrlSock/Zenoh -- see armLink.js for why.
-							armLink.sendJoints(joints, grip);
-						}
-					}
-				}
-			} catch (err) {
-				console.error("[control] gello tick failed", err);
-			}
+			// GELLO/arm: NOT handled here anymore -- gello.js relays raw serial
+			// lines to arm_agent.py directly from its own read loop (as fast as
+			// the firmware streams, ~60Hz), gated by control.browserControl the
+			// same way base commands are gated by activeDeadman above. See
+			// gello.js and armLink.js.
 		};
 		const restart = () => {
 			clearInterval(loopTimer);

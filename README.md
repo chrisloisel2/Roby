@@ -46,8 +46,8 @@ operator/
                          (connexion caméra partagée), camera, camera2,
                          armLink (WebSocket direct bras), status, control,
                          joystick, gello, settings, main
-  gello_reader.py        lit le GELLO en série, produit des angles calibrés follower
-  gello_calibration.json calibration GELLO déjà mesurée (copie de mon_gello.json)
+  gello_reader.py        lit le GELLO en série, relaie les lignes BRUTES (aucun calcul, voir plus bas)
+  gello_calibration.json obsolète/sans usage -- la calibration se charge côté robot maintenant
 robot/
   robot_agent.py         base mecanum : applique les commandes + watchdog LOCAL
   arm_agent.py            bras B601 : commandes en WebSocket direct (port 8767, PAS Zenoh), process séparé (env conda lerobot)
@@ -133,8 +133,8 @@ défaut `169.254.222.31`, voir `DEFAULT_ROBOT_IP` dans
 `operator/web/static/js/videoMux.js`) — à ajuster si l'IP du robot diffère.
 
 `GELLO_PORT` est optionnel : sans lui, `input_agent.py` tourne normalement
-(base + web) mais le bras GELLO reste désactivé (`read_gello()` renvoie
-toujours `None`).
+(base + web) mais le bras GELLO reste désactivé (`read_gello_raw_line()`
+renvoie toujours `None`).
 
 ## Robot réel : pilotage moteur direct (sans ROS 2)
 
@@ -215,24 +215,54 @@ PC robot, basé sur le framework `lerobot` (env conda `lerobot`) — voir
 cette calibration.
 
 ```text
-GELLO (série)                                  B601 (CAN, PC robot)
-      |  lecture + calibration déjà faite
+GELLO (série, RAW firmware)                    B601 (CAN, PC robot)
+      |  lecture série BRUTE, aucune calibration cote navigateur/input_agent
       v
-navigateur (armLink.js) ou input_agent.py (ArmLink)
-      |  WebSocket direct ws://<ip-robot>:8767 (PAS Zenoh)
+navigateur (gello.js -> armLink.js) ou input_agent.py (gello_reader.py -> ArmLink)
+      |  WebSocket direct ws://<ip-robot>:8767, {"raw": "<ligne firmware>"} (PAS Zenoh)
       v
-arm_agent.py --send_action()--> follower
+arm_agent.py : vraie classe lerobot GelloAs5600RawLeader.get_action() --send_action()--> follower
 ```
 
-Les commandes de position articulaire (joints + gripper) voyagent en
+Les lignes série **brutes et non calibrées** du GELLO voyagent en
 **WebSocket direct** navigateur/input_agent.py <-> `arm_agent.py`, comme la
 caméra -- `robot/cmd/arm` (Zenoh) n'existe plus. `robot/cmd/stop` et
 `robot/cmd/reset` (E-stop / réarmement) restent en revanche sur Zenoh,
 **inchangés** : ils sont partagés avec la base, et les déplacer aurait
-découplé cet arrêt d'urgence commun. `arm_agent.py` construit le follower
-via `make_robot_from_config()`, comme
+découplé cet arrêt d'urgence commun.
+
+**La calibration GELLO se fait maintenant dans un seul endroit** :
+`arm_agent.py` instancie la VRAIE classe lerobot `GelloAs5600RawLeader`
+(pas une réimplémentation), lui injecte directement les lectures brutes
+reçues par WebSocket dans son dict interne `_raw_angles` (le même que
+remplirait son propre `_reader_loop()` sur un port série local), puis
+appelle son vrai `get_action()` -- dépliage de la couture 0/360°, clip aux
+butées, lissage, sens/échelle/offset, tout le code lerobot, inchangé.
+Le fichier de calibration (`~/.cache/huggingface/lerobot/calibration/
+teleoperators/gello_as5600_raw_leader/<GELLO_TELEOP_ID>.json`, même fichier
+que `start_teleoperation.py` utilise) se charge automatiquement -- plus de
+copie dupliquée dans ce dépôt (`operator/gello_calibration.json` est
+maintenant sans usage, gardé seulement comme trace).
+
+**Pourquoi ce détour** (2026-07-09) : une première version faisait le calcul
+de calibration côté navigateur/`gello_reader.py` (réimplémentation portée à
+la main de `GelloAs5600RawLeader.get_action()`). Cette réimplémentation
+avait un vrai bug -- elle portait en fait la MAUVAISE classe lerobot
+(`GelloAs5600Leader`, pas `...RawLeader` : firmware différent, pas de
+dépliage de couture), ce qui donnait un mouvement erratique déconnecté du
+GELLO. Faire tourner la vraie classe lerobot côté robot, avec les
+navigateurs/`input_agent.py` en simples relais de données brutes, supprime
+cette classe entière de bug -- il n'y a plus qu'un seul endroit qui fait ce
+calcul, et c'est le code lerobot lui-même.
+
+`arm_agent.py` construit le follower via `make_robot_from_config()`, comme
 `~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py` (le script de
-téléop de référence sur ce matériel).
+téléop de référence sur ce matériel), et reproduit sa boucle exactement :
+`obs -> teleop.get_action() -> teleop_action_processor -> robot_action_processor
+-> send_action()`. Seule différence avec ce script : `teleop.get_action()` lit
+ses données depuis le WebSocket au lieu d'un port série local
+(`teleop.connect()` n'est jamais appelé -- juste `teleop.ser = object()`
+pour satisfaire son décorateur `@check_if_not_connected`).
 
 **Pourquoi pas la même connexion que la caméra** : `arm_agent.py` doit
 tourner sous l'env conda `lerobot` (RebotB601Follower/torch) alors que
@@ -255,34 +285,31 @@ Points clés :
   diffère). Cet env a maintenant aussi besoin du paquet `websockets`
   (`~/miniconda3/envs/lerobot/bin/pip install websockets`) -- absent par
   défaut, `arm_agent.py` ne démarrera pas sans.
-- **`gello_reader.py` ne dépend pas de lerobot** : réimplémentation autonome
-  (pyserial) de la lecture série + de la formule de calibration de
-  `GelloAs5600RawLeader.get_action()` (dépliage de la couture 0/360° ->
-  lissage -> clip aux butées -> sens -> échelle -> offset -- même classe que
-  `start_teleoperation.py`, PAS `GelloAs5600Leader`/"non-raw", une classe
-  différente pour un autre firmware GELLO ; confondre les deux a causé un
-  vrai bug -- mouvement erratique, cf. commit 2026-07-09), avec les mêmes
-  constantes et le même fichier de calibration déjà mesuré
-  (`operator/gello_calibration.json`, copie du fichier RAW déjà présent sur
-  le PC robot). Nécessite `GELLO_PORT` (variable d'env, ex.
-  `/dev/tty.usbserial-XXXX` sur macOS) — sans elle, désactivé proprement (pas
-  d'auto-probe : le mauvais port série n'est pas un risque à prendre).
-  `input_agent.py` a aussi besoin de `ROBOT_IP` (IP directe du PC robot, pas
-  routée par Zenoh) pour joindre `arm_agent.py` -- non requis tant qu'aucun
-  GELLO n'est détecté (pilotage base seul au joystick reste possible sans).
+- **`gello_reader.py` ne dépend pas de lerobot et ne fait plus aucun calcul** :
+  juste un lecteur série minimal (pyserial) qui garde la dernière ligne
+  brute reçue et la relaie telle quelle. Nécessite `GELLO_PORT` (variable
+  d'env, ex. `/dev/tty.usbserial-XXXX` sur macOS) — sans elle, désactivé
+  proprement (pas d'auto-probe : le mauvais port série n'est pas un risque
+  à prendre). `input_agent.py` a aussi besoin de `ROBOT_IP` (IP directe du
+  PC robot, pas routée par Zenoh) pour joindre `arm_agent.py` -- non requis
+  tant qu'aucun GELLO n'est détecté (pilotage base seul au joystick reste
+  possible sans). Même chose côté navigateur : `gello.js` ne fait plus
+  aucun calcul, juste `readLoop()` -> `armLink.sendRawLine()`, à chaque
+  ligne série (~60Hz, plus couplé à `control.rateHz` puisqu'il n'y a plus
+  de filtre de lissage côté navigateur).
 - **Gating indépendant de la base** : contrairement à `robot/cmd/base`, le
   bras n'est **pas** gaté par le homme-mort manette (piloter un bras 7 DOF
   demande les deux mains). `arm_agent.py` a son propre watchdog de fraîcheur
-  (`ARM_CMD_TIMEOUT_SEC`), maintenant basé sur la dernière commande reçue
-  par WebSocket : sans commande fraîche, il arrête juste d'envoyer de
-  nouvelles cibles (les moteurs Damiao tiennent seuls leur dernière consigne
-  — rien d'équivalent au ramp-to-zero de la base n'est nécessaire).
+  (`ARM_CMD_TIMEOUT_SEC`), basé sur la dernière ligne brute reçue par
+  WebSocket : sans ligne fraîche, il arrête juste d'envoyer de nouvelles
+  cibles (les moteurs Damiao tiennent seuls leur dernière consigne — rien
+  d'équivalent au ramp-to-zero de la base n'est nécessaire).
   `robot/cmd/stop`/`robot/cmd/reset` restent **partagés** avec la base : un
   seul arrêt d'urgence coupe les deux.
 - **Filet de sécurité supplémentaire** pour ce premier vrai essai sur ce
   chemin de pilotage : `max_relative_target` (quelques degrés par tick, voir
   `ARM_MAX_RELATIVE_TARGET_DEG` dans `arm_agent.py`), en plus du lissage déjà
-  fait côté GELLO.
+  fait par `GelloAs5600RawLeader.get_action()`.
 
 > Avant tout essai : `connect()` active le couple moteur du bras
 > **immédiatement** — bras dégagé/soutenu, comme pour la base.

@@ -13,20 +13,19 @@ robot/camera_pub.py's own WebSocket server (ws://<robot-ip>:8765, see
 static/js/camera.js) for lower latency than an extra JPEG-over-Zenoh hop
 would add. Losing this server does not lose the camera feed.
 
-Arm joint-position commands are ALSO not part of this bridge anymore: the
-browser sends those straight to robot/arm_agent.py's own WebSocket
-(ws://<robot-ip>:8767, see static/js/armLink.js) -- same reasoning as
-video. robot/cmd/stop and robot/cmd/reset (E-stop / re-arm) still go
-through this server's /ws/control, since they're shared with the base's
-own E-stop.
+Arm/GELLO data is ALSO not part of this bridge anymore: the browser relays
+raw GELLO serial lines straight to robot/arm_agent.py's own WebSocket
+(ws://<robot-ip>:8767, see static/js/gello.js + armLink.js) -- same
+reasoning as video. Calibration now happens server-side in arm_agent.py
+(a real lerobot teleoperator class), so this server no longer even serves
+gello_calibration.json -- the browser has nothing left to fetch. robot/cmd/
+stop and robot/cmd/reset (E-stop / re-arm) still go through this server's
+/ws/control, since they're shared with the base's own E-stop.
 
 Endpoints
 ---------
 GET  /                          the operator UI (operator/web/index.html)
 GET  /static/*                  the UI's assets (operator/web/static: css + JS modules)
-GET  /gello_calibration.json   GELLO calibration, fetched once by the browser's
-                                own Web Serial reader (see static/js/gello.js) so
-                                the measured values aren't duplicated in the page.
 WS   /ws/status                server -> browser : robot heartbeat, reported state, arm state
 WS   /ws/control               browser -> server : {type: base|deadman|stop|reset|gripper}
 
@@ -50,7 +49,6 @@ from fastapi.staticfiles import StaticFiles
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 CONFIG = Path(__file__).resolve().parent.parent / "config" / "operator_zenoh.json5"
-GELLO_CALIBRATION_PATH = Path(__file__).resolve().parent / "gello_calibration.json"
 
 HEARTBEAT_KEY = "robot/heartbeat"
 STATE_KEY = "robot/state"
@@ -122,11 +120,6 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 @app.get("/")
 async def index():
     return FileResponse(WEB_DIR / "index.html")
-
-
-@app.get("/gello_calibration.json")
-async def gello_calibration():
-    return FileResponse(GELLO_CALIBRATION_PATH)
 
 
 @app.websocket("/ws/status")

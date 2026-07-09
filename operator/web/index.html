@@ -265,14 +265,10 @@
 								gello_reader.py.</small>
 						</div>
 						<div class="field">
-							<label>Lissage exponentiel <b data-out="gello.smoothing">0.15</b></label>
-							<input type="range" data-cfg="gello.smoothing" data-fixed="2" min="0.05" max="1"
-								step="0.05">
-							<small>plus bas = plus lisse mais plus de latence sur le bras.</small>
-						</div>
-						<div class="field">
-							<label>Marge aux butées <b data-out="gello.rangeMarginDeg">5°</b></label>
-							<input type="range" data-cfg="gello.rangeMarginDeg" data-unit="°" min="0" max="15" step="1">
+							<small>Lissage et marge aux butées ne sont plus réglables ici depuis 2026-07-09 :
+								la calibration (dépliage 0/360°, clip, lissage) tourne maintenant côté robot,
+								dans la vraie classe lerobot <code>GelloAs5600RawLeader</code> -- voir
+								README § Bras GELLO. Cette page ne relaie plus que les lignes série brutes.</small>
 						</div>
 						<div class="field">
 							<label class="check"><input type="checkbox" data-cfg="gello.autoConnect">

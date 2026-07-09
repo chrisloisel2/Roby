@@ -13,44 +13,64 @@ scripts/start_arm.sh), not the project's own .venv.
 
 Deliberately mirrors `~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py`
 (this project's own known-good GELLO teleoperation script) as closely as
-possible: `make_robot_from_config()` to build the follower, and every tick
-runs the SAME `make_default_processors()` pipeline that script does --
-`obs = follower.get_observation()`, `teleop_action_processor((raw_action, obs))`,
-`robot_action_processor((teleop_action, obs))`, `follower.send_action(robot_action)`.
-The only thing that differs is where `raw_action` comes from: that script
-reads it from `teleop.get_action()` (a GELLO leader plugged into THIS
-machine's own serial port); here it comes from the WebSocket instead (the
-leader is read remotely -- browser Web Serial or input_agent.py -- and
-already produces the same `{name.pos: deg, ...}` shape
-`GelloAs5600RawLeader.get_action()` does, so it drops into `raw_action`
-unchanged). No teleoperator object is constructed here for that reason --
-there is no local leader to connect to.
+possible -- including, as of 2026-07-09, using the REAL
+`GelloAs5600RawLeader` teleoperator class for calibration, not a
+reimplementation. Every tick runs the exact same pipeline that script does:
+`obs = follower.get_observation()`, `raw_action = teleop.get_action()`,
+`teleop_action_processor((raw_action, obs))`,
+`robot_action_processor((teleop_action, obs))`,
+`follower.send_action(robot_action)`.
+
+The only thing that differs from start_teleoperation.py is WHERE
+`teleop`'s raw sensor readings come from: that script reads them from a
+GELLO leader wired to THIS machine's own serial port (`teleop.connect()` +
+its background `_reader_loop()`); here they arrive over a WebSocket instead
+(read remotely -- browser Web Serial via operator/web/static/js/gello.js,
+or input_agent.py -- see on_arm_ws() below), because the physical GELLO is
+plugged into the OPERATOR PC, not this one. `on_arm_ws()` feeds each raw
+line straight into `teleop._raw_angles` (the exact dict `_reader_loop()`
+would have written), so `teleop.get_action()` runs UNMODIFIED and produces
+byte-identical output to a real local connection -- this file does zero
+calibration math of its own.
+
+This replaced an earlier version (2026-07-09) that had the browser/
+input_agent.py compute the calibrated action client-side (a hand-ported
+reimplementation of GelloAs5600RawLeader's math) and send the ALREADY-
+CALIBRATED {name.pos: deg} dict here. That reimplementation had a real bug
+(ported the wrong lerobot class entirely, no angle-unwrap -- see
+operator/gello_reader.py's docstring for the full story) before it was
+fixed, which is exactly the failure mode of hand-porting calibration math
+in two places instead of using the one real implementation. Relaying raw,
+uninterpreted sensor data and running the actual lerobot class here
+removes that whole class of bug -- there is now exactly ONE place that
+does GELLO calibration math, and it's lerobot's own.
 
 Command contract
 ----------------
-WebSocket ws://<robot-ip>:ARM_WS_PORT   JSON text messages:
-                  {"joints": {name: deg, ...}, "gripper": float, "mode": str}.
-                  Sent DIRECTLY by the browser (operator/web/static/js/armLink.js),
-                  bypassing Zenoh + web_server.py's /ws/control relay --
-                  same "direct WebSocket, one fewer hop" pattern as
-                  camera_pub.py's video, but its OWN connection/port, not
-                  shared with the camera: this process needs the `lerobot`
-                  conda env, whose own opencv-python has NO GStreamer
-                  support (confirmed empirically 2026-07-09 -- same failure
-                  mode already documented in requirements.txt/README for a
+WebSocket ws://<robot-ip>:ARM_WS_PORT   JSON text messages: {"raw": "<line>"}
+                  where <line> is a raw, UNPROCESSED line of GELLO firmware
+                  output (`t<ms> J1:<deg> J2:<deg> ... J7:<deg>`, absolute
+                  sensor degrees in [0, 360), relayed byte-for-byte from
+                  the serial port -- see gello.js's readLoop() /
+                  gello_reader.py). Sent DIRECTLY by the browser
+                  (operator/web/static/js/armLink.js), bypassing Zenoh +
+                  web_server.py's /ws/control relay -- same "direct
+                  WebSocket, one fewer hop" pattern as camera_pub.py's
+                  video, but its OWN connection/port, not shared with the
+                  camera: this process needs the `lerobot` conda env,
+                  whose own opencv-python has NO GStreamer support
+                  (confirmed empirically 2026-07-09 -- same failure mode
+                  already documented in requirements.txt/README for a
                   generic PyPI opencv-python wheel), so it can't share a
                   process with camera_pub.py (which needs system cv2 with
                   GStreamer) without breaking one of the two.
 
-                  Joints are ALREADY leader-calibrated into the follower's
-                  frame by the browser's own GELLO/Web Serial reader (a
-                  port of operator/gello_reader.py's math -- see
-                  index.html) -- this process applies them close to
-                  directly (soft joint-limit clip and a max_relative_target
-                  safety cap happen inside RebotB601Follower.send_action(),
-                  nothing else). Ignored unless "mode" == "joint_position".
-                  This is the exact same contract robot/cmd/arm carried
-                  before -- only the transport changed, Zenoh -> WebSocket.
+                  A soft joint-limit clip and a max_relative_target safety
+                  cap happen inside RebotB601Follower.send_action(), on top
+                  of GelloAs5600RawLeader.get_action()'s own smoothing and
+                  measured-range clip. Any line with at least one parseable
+                  `J<n>:<deg>` field refreshes the freshness watchdog below,
+                  even if some joints are missing/"ERR" that tick.
 robot/cmd/stop    (Zenoh, UNCHANGED) Any payload -> latching emergency stop.
                   Shared topic with robot_agent.py: one E-stop
                   button/command kills both the base and the arm. Left on
@@ -80,14 +100,19 @@ stop_robot() ramp-to-zero here.
 Threading model: the 50Hz send_action()/get_observation() control loop runs
 in a background thread (same split as robot/uvc_camera_server.py's
 CameraCapture) so the ~1ms-scale CAN I/O it does never blocks the asyncio
-WebSocket server (running on the main thread) from receiving the next
-joint command. The Zenoh subscribers (stop/reset) run on Zenoh's own
-internal callback thread, same as before. All three touch the shared
-`state` object only under `state.lock`.
+WebSocket server (running on the main thread) from receiving the next raw
+GELLO line. The Zenoh subscribers (stop/reset) run on Zenoh's own internal
+callback thread, same as before. `state` (freshness/estop) is touched only
+under `state.lock`; `teleop._raw_angles` (written by on_arm_ws, read by
+teleop.get_action() in the control loop) is touched only under `teleop._lock`
+-- the SAME lock GelloAs5600RawLeader's own _reader_loop()/_get_raw() use
+internally, so writing into it from here follows the class's own thread-
+safety contract instead of inventing a new one.
 """
 import asyncio
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -102,16 +127,35 @@ from zenoh_config import load_robot_config
 from lerobot.processor import make_default_processors
 from lerobot.robots import make_robot_from_config
 from lerobot.robots.rebot_b601_follower import RebotB601Follower, RebotB601FollowerRobotConfig
+from lerobot.teleoperators.gello_as5600_raw_leader import (
+    GelloAs5600RawLeader,
+    GelloAs5600RawLeaderTeleopConfig,
+)
 from lerobot.utils.robot_utils import precise_sleep
 
 # --- Safety parameters -------------------------------------------------------
-ARM_CMD_TIMEOUT_SEC = 0.3  # stop sending new targets if no fresh WS command
+ARM_CMD_TIMEOUT_SEC = 0.3  # stop sending new targets if no fresh raw GELLO line
 CONTROL_PERIOD = 0.02      # 50 Hz -- matches the hz already proven on this arm
                             # (see ~/03_JelloSoft/rebot_lerobot/scripts/gello_follow.py)
 HEARTBEAT_PERIOD = 0.2     # 5 Hz heartbeat / state, incl. a present-position read
 
 ARM_WS_HOST = "0.0.0.0"
 ARM_WS_PORT = 8767
+
+# Same regex gello_reader.py/gello.js use to parse a firmware line -- kept
+# identical deliberately, this is the one place left that has to agree with
+# them on wire format.
+_JOINT_LINE_RE = re.compile(r"J(\d+):(-?\d+\.\d+|ERR)")
+
+# GELLO teleoperator id: must match the calibration file already generated
+# on this machine (~/.cache/huggingface/lerobot/calibration/teleoperators/
+# gello_as5600_raw_leader/<id>.json), same file
+# ~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py uses.
+GELLO_TELEOP_ID = os.environ.get("GELLO_TELEOP_ID", "mon_gello")
+# Never actually opened (see main(): teleop.connect() is deliberately never
+# called, raw sensor lines arrive over the WebSocket instead) -- just needs
+# to be a non-empty string for GelloAs5600RawLeaderTeleopConfig's port field.
+GELLO_VIRTUAL_PORT = "virtual:no-local-serial-see-on_arm_ws"
 
 running = True  # set False on shutdown to stop the control-loop thread
 
@@ -195,7 +239,6 @@ def _load_joint_limits_override() -> dict[str, tuple[float, float]] | None:
 class State:
     def __init__(self) -> None:
         self.lock = threading.Lock()
-        self.arm_cmd: dict | None = None
         self.last_arm_ts = 0.0
         self.estop = False  # latching
 
@@ -203,22 +246,16 @@ class State:
 state = State()
 
 
-def _raw_action_from_cmd(cmd: dict) -> dict[str, float]:
-    """The `raw_action` start_teleoperation.py would have gotten from
-    `teleop.get_action()` -- same {name.pos: deg, ...} shape
-    GelloAs5600RawLeader.get_action() returns (already leader-calibrated),
-    just sourced from the WebSocket command instead of a local serial read.
+# --- WebSocket handler (raw GELLO lines, direct from the browser) -----------
+
+async def on_arm_ws(websocket, teleop: GelloAs5600RawLeader) -> None:
+    """Feeds raw GELLO firmware lines straight into `teleop._raw_angles` --
+    the exact dict GelloAs5600RawLeader's own _reader_loop() would write if
+    it were reading a local serial port -- so teleop.get_action() (called
+    from control_loop, unmodified) sees the same data it would from a real
+    connection. No calibration math happens here; see this file's module
+    docstring for why that's deliberate.
     """
-    action = {f"{name}.pos": float(deg) for name, deg in cmd.get("joints", {}).items()}
-    gripper = cmd.get("gripper")
-    if gripper is not None:
-        action["gripper.pos"] = float(gripper)
-    return action
-
-
-# --- WebSocket handler (joint commands, direct from the browser) ------------
-
-async def on_arm_ws(websocket) -> None:
     peer = websocket.remote_address
     print(f"[arm_agent] client connected from {peer}", flush=True)
     try:
@@ -226,13 +263,21 @@ async def on_arm_ws(websocket) -> None:
             if not isinstance(message, str):
                 continue
             try:
-                cmd = json.loads(message)
+                msg = json.loads(message)
             except ValueError:
                 continue
-            if cmd.get("mode") != "joint_position":
+            line = msg.get("raw")
+            if not isinstance(line, str):
                 continue
+            matches = _JOINT_LINE_RE.findall(line)
+            if not matches:
+                continue
+            with teleop._lock:
+                for jid_s, val_s in matches:
+                    if val_s == "ERR":
+                        continue
+                    teleop._raw_angles[int(jid_s)] = float(val_s)
             with state.lock:
-                state.arm_cmd = cmd
                 state.last_arm_ts = time.time()
     except websockets.ConnectionClosed:
         print(f"[arm_agent] client {peer} disconnected", flush=True)
@@ -264,30 +309,37 @@ def on_reset(_sample, follower: RebotB601Follower) -> None:
 
 # --- Control loop (background thread) ----------------------------------------
 
-def control_loop(follower: RebotB601Follower, pub_state, teleop_action_processor, robot_action_processor) -> None:
+def control_loop(
+    follower: RebotB601Follower,
+    teleop: GelloAs5600RawLeader,
+    pub_state,
+    teleop_action_processor,
+    robot_action_processor,
+) -> None:
     last_beat = 0.0
     while running:
         tick_start = time.time()
         now = tick_start
         with state.lock:
-            cmd = state.arm_cmd
             estop = state.estop
             fresh_cmd = (now - state.last_arm_ts) < ARM_CMD_TIMEOUT_SEC
 
-        moving = fresh_cmd and not estop and cmd is not None
+        moving = fresh_cmd and not estop
         # Same per-tick shape as start_teleoperation.py's loop: obs ->
         # raw_action -> teleop_action_processor -> robot_action_processor ->
-        # send_action(). teleop_action_processor/robot_action_processor come
-        # from make_default_processors(), same call every lerobot script
-        # uses -- currently both IdentityProcessorStep (no-ops) but going
-        # through them (instead of building the .pos dict and calling
-        # send_action() straight off it) means this keeps working unchanged
-        # if lerobot's own default pipeline ever stops being a no-op.
+        # send_action(). raw_action now comes from the REAL
+        # teleop.get_action() (unwrap/clip/smooth/direction/scale/offset,
+        # all lerobot's own code -- see on_arm_ws()), not a hand-rolled
+        # dict. teleop_action_processor/robot_action_processor come from
+        # make_default_processors(), same call every lerobot script uses --
+        # currently both IdentityProcessorStep (no-ops) but going through
+        # them means this keeps working unchanged if lerobot's own default
+        # pipeline ever stops being a no-op.
         obs = None
         if moving:
             try:
                 obs = follower.get_observation()
-                raw_action = _raw_action_from_cmd(cmd)
+                raw_action = teleop.get_action()
                 teleop_action = teleop_action_processor((raw_action, obs))
                 robot_action = robot_action_processor((teleop_action, obs))
                 follower.send_action(robot_action)
@@ -332,8 +384,11 @@ def control_loop(follower: RebotB601Follower, pub_state, teleop_action_processor
         precise_sleep(max(0.0, CONTROL_PERIOD - elapsed))
 
 
-async def _serve_forever() -> None:
-    async with websockets.serve(on_arm_ws, ARM_WS_HOST, ARM_WS_PORT, ping_interval=20):
+async def _serve_forever(teleop: GelloAs5600RawLeader) -> None:
+    async def handler(websocket):
+        await on_arm_ws(websocket, teleop)
+
+    async with websockets.serve(handler, ARM_WS_HOST, ARM_WS_PORT, ping_interval=20):
         print(f"arm_agent: listening on ws://{ARM_WS_HOST}:{ARM_WS_PORT}", flush=True)
         await asyncio.Future()
 
@@ -370,6 +425,28 @@ def main() -> None:
         )
     print("arm_agent: follower connected and calibrated.")
 
+    print(f"arm_agent: loading GELLO calibration for teleop id={GELLO_TELEOP_ID!r}...")
+    teleop = GelloAs5600RawLeader(GelloAs5600RawLeaderTeleopConfig(port=GELLO_VIRTUAL_PORT, id=GELLO_TELEOP_ID))
+    # Deliberately never call teleop.connect(): that would try to open
+    # GELLO_VIRTUAL_PORT for real (it isn't a real port) and block ~2.5s
+    # waiting for firmware that will never answer. Teleoperator.__init__()
+    # already auto-loaded the calibration file matching `id` above (see
+    # lerobot/teleoperators/teleoperator.py) -- that's the only thing
+    # connect() would add that we actually need. Just satisfy
+    # get_action()'s @check_if_not_connected decorator, which only checks
+    # `self.ser is not None`, with a harmless non-None sentinel -- raw
+    # sensor data arrives via on_arm_ws() instead of teleop's own
+    # (never-started) _reader_loop().
+    teleop.ser = object()
+    if not teleop.is_calibrated:
+        raise RuntimeError(
+            f"GELLO teleoperator has no calibration file matching id={GELLO_TELEOP_ID!r} -- "
+            "expected ~/.cache/huggingface/lerobot/calibration/teleoperators/"
+            f"gello_as5600_raw_leader/{GELLO_TELEOP_ID}.json (the same file "
+            "~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py uses)."
+        )
+    print(f"arm_agent: GELLO calibration loaded for id={GELLO_TELEOP_ID!r}.")
+
     # Same make_default_processors() call start_teleoperation.py makes --
     # robot_observation_processor is unused there too (that script only
     # ever calls robot.get_observation() directly, same as here).
@@ -388,14 +465,14 @@ def main() -> None:
             # handling for however long each CAN round-trip takes.
             thread = threading.Thread(
                 target=control_loop,
-                args=(follower, pub_state, teleop_action_processor, robot_action_processor),
+                args=(follower, teleop, pub_state, teleop_action_processor, robot_action_processor),
                 daemon=True,
             )
             thread.start()
 
-            print("arm_agent running. Waiting for arm WebSocket commands...")
+            print("arm_agent running. Waiting for raw GELLO WebSocket data...")
             try:
-                asyncio.run(_serve_forever())
+                asyncio.run(_serve_forever(teleop))
             except KeyboardInterrupt:
                 pass
     finally:

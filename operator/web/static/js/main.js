@@ -5,11 +5,11 @@
 //   videoMux.js  ws://<robot-ip>:8765 (direct to robot, ONE shared connection for both cameras)
 //   camera.js    front camera (cam_id 0) -> canvas (latest-frame rendering)
 //   camera2.js   second camera (cam_id 1) -> picture-in-picture canvas
-//   armLink.js   ws://<robot-ip>:8767 (direct to robot/arm_agent.py) -> joint-position commands
+//   armLink.js   ws://<robot-ip>:8767 (direct to robot/arm_agent.py) -> raw GELLO lines
 //   status.js    /ws/status -> tiles, banner, arm joint gauges
-//   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control (base/stop/reset/gripper) + armLink (arm)
+//   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control (base/stop/reset/gripper)
 //   joystick.js  Gamepad API + dynamic mapping
-//   gello.js     GELLO leader arm over Web Serial
+//   gello.js     GELLO leader arm over Web Serial -> armLink (raw lines, its own read-loop rate)
 //   settings.js  settings modal bound to config.js
 
 import { config } from "./config.js";
@@ -30,14 +30,14 @@ const camera = initCamera({ setTile, mux: videoMux });
 initCamera2({ mux: videoMux });
 const armLink = createArmLink();
 const status = initStatus();
-const control = initControl({ onFullscreen: camera.toggleFullscreen, armLink });
+const control = initControl({ onFullscreen: camera.toggleFullscreen });
 const joystick = initJoystick({
 	onStop: control.triggerStop,
 	onReset: control.sendReset,
 	onGripDelta: control.adjustGripper,
 });
-const gello = initGello();
-control.start({ joystick, gello });
+initGello({ armLink });
+control.start({ joystick });
 initSettings();
 
 // ---- Connection badge (server link) ----
