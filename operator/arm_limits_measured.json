@@ -1,0 +1,97 @@
+{
+  "captured_at": "2026-07-08T15:34:22.024813+00:00",
+  "gello_port": "/dev/tty.usbserial-2130",
+  "margin_deg": 3.0,
+  "samples": 2277,
+  "duration_sec": 54.3,
+  "measured_deg": {
+    "shoulder_pan": {
+      "min": -106.97995909375912,
+      "max": 107.42293821157217
+    },
+    "shoulder_lift": {
+      "min": -166.6899997599025,
+      "max": 20.949170855898657
+    },
+    "elbow_flex": {
+      "min": -169.04,
+      "max": -162.3895120432734
+    },
+    "wrist_flex": {
+      "min": -92.22999999971178,
+      "max": 47.893764307408304
+    },
+    "wrist_yaw": {
+      "min": -99.90999998780885,
+      "max": 53.11121689607434
+    },
+    "wrist_roll": {
+      "min": -111.8399983956184,
+      "max": 112.57487425081901
+    },
+    "gripper": {
+      "min": -100.50835186541136,
+      "max": 16.2249080293063
+    }
+  },
+  "current_follower_joint_limits": {
+    "shoulder_pan": [
+      -150.0,
+      150.0
+    ],
+    "shoulder_lift": [
+      -200.0,
+      1.0
+    ],
+    "elbow_flex": [
+      -200.0,
+      1.0
+    ],
+    "wrist_flex": [
+      -80.0,
+      90.0
+    ],
+    "wrist_yaw": [
+      -90.0,
+      90.0
+    ],
+    "wrist_roll": [
+      -90.0,
+      90.0
+    ],
+    "gripper": [
+      -270.0,
+      0.0
+    ]
+  },
+  "proposed_joint_limits": {
+    "shoulder_pan": [
+      -110.0,
+      110.4
+    ],
+    "shoulder_lift": [
+      -169.7,
+      23.9
+    ],
+    "elbow_flex": [
+      -172.0,
+      -159.4
+    ],
+    "wrist_flex": [
+      -95.2,
+      50.9
+    ],
+    "wrist_yaw": [
+      -102.9,
+      56.1
+    ],
+    "wrist_roll": [
+      -114.8,
+      115.6
+    ],
+    "gripper": [
+      -103.5,
+      19.2
+    ]
+  }
+}
