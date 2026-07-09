@@ -11,12 +11,20 @@ on this machine) pulls in the full lerobot package and its dependency chain
 control loop. This file MUST run with the `lerobot` conda env's python (see
 scripts/start_arm.sh), not the project's own .venv.
 
-Robot construction now goes through `make_robot_from_config()` (same
-pattern as `~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py`,
-this project's own known-good GELLO teleoperation script) instead of
-instantiating RebotB601Follower directly -- functionally identical
-(make_robot_from_config just dispatches on config.type to the same class),
-done for consistency with that reference script.
+Deliberately mirrors `~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py`
+(this project's own known-good GELLO teleoperation script) as closely as
+possible: `make_robot_from_config()` to build the follower, and every tick
+runs the SAME `make_default_processors()` pipeline that script does --
+`obs = follower.get_observation()`, `teleop_action_processor((raw_action, obs))`,
+`robot_action_processor((teleop_action, obs))`, `follower.send_action(robot_action)`.
+The only thing that differs is where `raw_action` comes from: that script
+reads it from `teleop.get_action()` (a GELLO leader plugged into THIS
+machine's own serial port); here it comes from the WebSocket instead (the
+leader is read remotely -- browser Web Serial or input_agent.py -- and
+already produces the same `{name.pos: deg, ...}` shape
+`GelloAs5600RawLeader.get_action()` does, so it drops into `raw_action`
+unchanged). No teleoperator object is constructed here for that reason --
+there is no local leader to connect to.
 
 Command contract
 ----------------
@@ -91,8 +99,10 @@ import zenoh
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zenoh_config import load_robot_config
 
+from lerobot.processor import make_default_processors
 from lerobot.robots import make_robot_from_config
 from lerobot.robots.rebot_b601_follower import RebotB601Follower, RebotB601FollowerRobotConfig
+from lerobot.utils.robot_utils import precise_sleep
 
 # --- Safety parameters -------------------------------------------------------
 ARM_CMD_TIMEOUT_SEC = 0.3  # stop sending new targets if no fresh WS command
@@ -193,7 +203,12 @@ class State:
 state = State()
 
 
-def _build_action(cmd: dict) -> dict[str, float]:
+def _raw_action_from_cmd(cmd: dict) -> dict[str, float]:
+    """The `raw_action` start_teleoperation.py would have gotten from
+    `teleop.get_action()` -- same {name.pos: deg, ...} shape
+    GelloAs5600RawLeader.get_action() returns (already leader-calibrated),
+    just sourced from the WebSocket command instead of a local serial read.
+    """
     action = {f"{name}.pos": float(deg) for name, deg in cmd.get("joints", {}).items()}
     gripper = cmd.get("gripper")
     if gripper is not None:
@@ -249,7 +264,7 @@ def on_reset(_sample, follower: RebotB601Follower) -> None:
 
 # --- Control loop (background thread) ----------------------------------------
 
-def control_loop(follower: RebotB601Follower, pub_state) -> None:
+def control_loop(follower: RebotB601Follower, pub_state, teleop_action_processor, robot_action_processor) -> None:
     last_beat = 0.0
     while running:
         tick_start = time.time()
@@ -260,19 +275,31 @@ def control_loop(follower: RebotB601Follower, pub_state) -> None:
             fresh_cmd = (now - state.last_arm_ts) < ARM_CMD_TIMEOUT_SEC
 
         moving = fresh_cmd and not estop and cmd is not None
+        # Same per-tick shape as start_teleoperation.py's loop: obs ->
+        # raw_action -> teleop_action_processor -> robot_action_processor ->
+        # send_action(). teleop_action_processor/robot_action_processor come
+        # from make_default_processors(), same call every lerobot script
+        # uses -- currently both IdentityProcessorStep (no-ops) but going
+        # through them (instead of building the .pos dict and calling
+        # send_action() straight off it) means this keeps working unchanged
+        # if lerobot's own default pipeline ever stops being a no-op.
+        obs = None
         if moving:
             try:
-                follower.send_action(_build_action(cmd))
+                obs = follower.get_observation()
+                raw_action = _raw_action_from_cmd(cmd)
+                teleop_action = teleop_action_processor((raw_action, obs))
+                robot_action = robot_action_processor((teleop_action, obs))
+                follower.send_action(robot_action)
             except Exception as exc:
                 print(f"[arm_agent] send_action failed: {exc}")
 
         if now - last_beat >= HEARTBEAT_PERIOD:
             last_beat = now
             try:
-                joints = {
-                    k.removesuffix(".pos"): v
-                    for k, v in follower.get_observation().items()
-                }
+                if obs is None:  # not already fetched above this tick
+                    obs = follower.get_observation()
+                joints = {k.removesuffix(".pos"): v for k, v in obs.items()}
             except Exception as exc:
                 print(f"[arm_agent] get_observation failed: {exc}")
                 joints = {}
@@ -285,20 +312,24 @@ def control_loop(follower: RebotB601Follower, pub_state) -> None:
                 "ts": now,
             }))
 
-        # Elapsed-time-aware sleep: a flat time.sleep(CONTROL_PERIOD) would
-        # make the loop run SLOWER than 50Hz by however long
-        # send_action()/get_observation() actually took (silently -- nothing
-        # would ever indicate the loop had fallen behind). Measured cost of
-        # send_action()'s CAN round-trip on this hardware is ~1.2ms
-        # (negligible against the 20ms budget), so this rarely matters in
-        # practice -- but the print below makes a future regression (a flaky
-        # USB moment, a much heavier CAN load) visible instead of just
-        # adding silent, unmeasured latency to every GELLO->arm movement.
+        # Elapsed-time-aware sleep, same as start_teleoperation.py's own
+        # `precise_sleep(max(1 / fps - dt_s, 0.0))` -- a flat
+        # time.sleep(CONTROL_PERIOD) would make the loop run SLOWER than
+        # 50Hz by however long send_action()/get_observation() actually
+        # took (silently -- nothing would ever indicate the loop had fallen
+        # behind). Measured cost of send_action()'s CAN round-trip on this
+        # hardware is ~1.2ms (negligible against the 20ms budget), so this
+        # rarely matters in practice -- but the print below makes a future
+        # regression (a flaky USB moment, a much heavier CAN load) visible
+        # instead of just adding silent, unmeasured latency to every
+        # GELLO->arm movement. precise_sleep() is a plain time.sleep() on
+        # Linux (this robot) -- the spin-the-last-few-ms behavior it adds
+        # only kicks in on macOS/Windows.
         elapsed = time.time() - tick_start
         if elapsed > CONTROL_PERIOD:
             print(f"[arm_agent] tick took {elapsed * 1000:.1f}ms "
                   f"(budget {CONTROL_PERIOD * 1000:.0f}ms) -- loop running behind", flush=True)
-        time.sleep(max(0.0, CONTROL_PERIOD - elapsed))
+        precise_sleep(max(0.0, CONTROL_PERIOD - elapsed))
 
 
 async def _serve_forever() -> None:
@@ -339,6 +370,11 @@ def main() -> None:
         )
     print("arm_agent: follower connected and calibrated.")
 
+    # Same make_default_processors() call start_teleoperation.py makes --
+    # robot_observation_processor is unused there too (that script only
+    # ever calls robot.get_observation() directly, same as here).
+    teleop_action_processor, robot_action_processor, _robot_observation_processor = make_default_processors()
+
     thread = None
     try:
         with zenoh.open(load_robot_config("arm_agent")) as session:
@@ -350,7 +386,11 @@ def main() -> None:
             # do blocking CAN I/O -- running them as a coroutine on the same
             # loop as websockets.serve() would stall incoming-message
             # handling for however long each CAN round-trip takes.
-            thread = threading.Thread(target=control_loop, args=(follower, pub_state), daemon=True)
+            thread = threading.Thread(
+                target=control_loop,
+                args=(follower, pub_state, teleop_action_processor, robot_action_processor),
+                daemon=True,
+            )
             thread.start()
 
             print("arm_agent running. Waiting for arm WebSocket commands...")
