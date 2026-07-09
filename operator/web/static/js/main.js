@@ -2,9 +2,12 @@
 //
 //   config.js    central settings store (localStorage, versioned, exportable)
 //   net.js       auto-reconnecting WebSockets
-//   videoMux.js  ws://<robot-ip>:8765 (direct to robot, ONE shared connection for both cameras)
-//   camera.js    front camera (cam_id 0) -> canvas (latest-frame rendering)
-//   camera2.js   second camera (cam_id 1) -> picture-in-picture canvas
+//   videoMux.js  ws://<robot-ip>:8765 (direct to robot, ONE shared connection for every camera,
+//                auto-discovered robot-side -- see robot/uvc_camera_server.py's CameraManager)
+//   cameraRoles.js  resolves which discovered camera plays the primary/secondary UI role,
+//                shared by camera.js/camera2.js (rendering) and settings.js (the picker)
+//   camera.js    primary camera -> canvas (latest-frame rendering)
+//   camera2.js   secondary camera -> picture-in-picture canvas (hidden if none assigned)
 //   popoutCanvas.js  shared "detach to another screen" popup window helper,
 //                used by both camera.js and camera2.js
 //   armLink.js   ws://<robot-ip>:8767 (direct to robot/arm_agent.py) -> raw GELLO lines
@@ -12,7 +15,7 @@
 //   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control (base/stop/reset/gripper)
 //   joystick.js  Gamepad API + dynamic mapping
 //   gello.js     GELLO leader arm over Web Serial -> armLink (raw lines, its own read-loop rate)
-//   settings.js  settings modal bound to config.js
+//   settings.js  settings modal bound to config.js (incl. the camera-role pickers, fed by videoMux.js)
 
 import { config } from "./config.js";
 import { createVideoMux } from "./videoMux.js";
@@ -40,7 +43,7 @@ const joystick = initJoystick({
 });
 initGello({ armLink });
 control.start({ joystick });
-initSettings();
+initSettings({ mux: videoMux });
 
 // ---- Connection badge (server link) ----
 setInterval(() => {

@@ -19,9 +19,48 @@ function formatFor(input, value) {
 	return (fixed != null ? v.toFixed(parseInt(fixed, 10)) : Math.round(v * 1000) / 1000) + unit;
 }
 
-export function initSettings() {
+export function initSettings({ mux } = {}) {
 	const $ = (id) => document.getElementById(id);
 	const modal = $("settingsModal");
+
+	// ---- Caméras: populate the primary/secondary <select>s from the
+	// robot's live, auto-discovered camera list (videoMux.js) -- their
+	// data-cfg/data-type bindings below are otherwise identical to any
+	// other <select>, this just keeps their <option>s in sync with
+	// whatever's actually plugged in instead of a fixed list. Runs before
+	// loadValues() below so the "auto"/"aucune" sentinel options always
+	// exist by the time it tries to select a value.
+	if (mux) {
+		const primarySelect = $("camPrimarySelect");
+		const secondarySelect = $("camSecondarySelect");
+		const hint = $("camListHint");
+		mux.onCameraList((cameras) => {
+			if (!primarySelect || !secondarySelect) return;
+			const fillOptions = (select, includeNone) => {
+				const current = select.value;
+				select.innerHTML = "";
+				select.add(new Option("Auto", "-1"));
+				if (includeNone) select.add(new Option("Aucune", "-2"));
+				for (const cam of cameras) {
+					select.add(new Option(`${cam.name} (id ${cam.id}, ${cam.width}x${cam.height})`, String(cam.id)));
+				}
+				if ([...select.options].some((o) => o.value === current)) select.value = current;
+			};
+			fillOptions(primarySelect, false);
+			fillOptions(secondarySelect, true);
+			// Re-apply the persisted config value now that matching
+			// <option>s exist (a plain fillOptions() above only preserves
+			// whatever was already visually selected, not the config on
+			// first run before loadValues() has ever set it).
+			primarySelect.value = String(config.get("cameras.primaryId"));
+			secondarySelect.value = String(config.get("cameras.secondaryId"));
+			if (hint) {
+				hint.textContent = cameras.length
+					? `${cameras.length} caméra(s) détectée(s) sur le robot.`
+					: "Aucune caméra détectée pour l'instant — branche-la sur le PC robot, elle apparaît ici automatiquement en quelques secondes (pas de redémarrage nécessaire).";
+			}
+		});
+	}
 
 	// ---- Tabs ----
 	const tabs = $("settingsTabs");

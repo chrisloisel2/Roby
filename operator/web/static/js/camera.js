@@ -4,7 +4,11 @@
 // robot/camera_pub.py -- not relayed through web_server.py's /ws/*, one
 // fewer hop cuts real latency at this resolution) also used by camera2.js
 // for the second camera -- see videoMux.js for why that's one connection,
-// not two. This module just subscribes to its own cam_id.
+// not two. Which physical camera (cam_id) this tile shows is resolved
+// dynamically (cameraRoles.js: config.js's `cameras.primaryId` preference
+// against the robot's live, auto-discovered camera list) rather than a
+// fixed id -- see videoMux.js/uvc_camera_server.py for why there's no more
+// fixed "front" cam_id at all.
 //
 // Receiving a frame and displaying it are deliberately decoupled: the mux
 // callback just stashes the latest frame bytes (cheap), a
@@ -17,7 +21,7 @@
 // drifting from ~200ms up to ~0.5s instead of staying flat).
 
 import { config } from "./config.js";
-import { CAM_FRONT } from "./videoMux.js";
+import { resolvePrimaryId } from "./cameraRoles.js";
 import { createPopout, rafOn } from "./popoutCanvas.js";
 import { toast } from "./toast.js";
 
@@ -29,15 +33,29 @@ export function initCamera({ setTile, mux }) {
 	const chipAge = document.getElementById("chipAge");
 	const fpsEl = document.getElementById("fps");
 	const ageEl = document.getElementById("age");
+	const camNameEl = document.getElementById("camName");
 	const videoPanel = document.getElementById("videoPanel");
 	const camCtx = cam.getContext("2d");
-	const popout = createPopout({ title: "Roby — Caméra avant" });
+	const popout = createPopout({ title: "Roby — Caméra principale" });
 
 	let lastFrame = 0;
 	const frameStamps = [];
 	let latestCamData = null, camDataSeq = 0, displayedSeq = -1, renderingCam = false;
+	let targetId = null;
 
-	mux.onFrame(CAM_FRONT, (jpegBytes) => {
+	function recomputeTarget() {
+		const cameras = mux.getCameras();
+		targetId = resolvePrimaryId(cameras);
+		if (camNameEl) {
+			const found = cameras.find((c) => c.id === targetId);
+			camNameEl.textContent = found ? found.name : "caméra principale";
+		}
+	}
+	mux.onCameraList(recomputeTarget);
+	config.subscribe((path) => { if (path.startsWith("cameras.")) recomputeTarget(); });
+
+	mux.onAnyFrame((camId, jpegBytes) => {
+		if (camId !== targetId) return;
 		latestCamData = jpegBytes;
 		camDataSeq++;
 		const now = performance.now();

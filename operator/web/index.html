@@ -38,7 +38,7 @@
 				<div class="chips">
 					<span class="chip"><span>FPS</span><b id="fps">–</b></span>
 					<span class="chip" id="chipAge"><span>latence</span><b id="age">–</b></span>
-					<span class="chip"><span>caméra avant</span></span>
+					<span class="chip"><span id="camName">caméra principale</span></span>
 				</div>
 				<div class="video-actions">
 					<button class="icon-btn ghost" id="btnFit" title="Ajustement vidéo (contain / cover)">⤢</button>
@@ -48,7 +48,7 @@
 				<div class="rec"><span class="dot"></span>LIVE</div>
 				<div class="video-pip" id="videoPip">
 					<canvas id="cam2" role="img" aria-label="Flux caméra secondaire"></canvas>
-					<span class="chip pip-label"><span>caméra 2</span></span>
+					<span class="chip pip-label"><span id="camName2">caméra secondaire</span></span>
 					<button class="icon-btn ghost pip-detach" id="btnDetach2" title="Détacher sur un autre écran">⇱</button>
 					<div class="noSignal show" id="noSignal2">
 						<div class="sub">en attente du flux caméra 2…</div>
@@ -218,7 +218,8 @@
 			<div class="modal-body">
 				<nav class="tabs" id="settingsTabs">
 					<button data-tab="control" class="on">Contrôle</button>
-					<button data-tab="joystick">Manette</button>
+					<button data-tab="cameras">Caméras</button>
+						<button data-tab="joystick">Manette</button>
 					<button data-tab="gello">GELLO</button>
 					<button data-tab="ui">Interface</button>
 				</nav>
@@ -243,6 +244,21 @@
 							<label>Pas de la pince (boutons manette) <b data-out="control.gripStep">2 %</b></label>
 							<input type="range" data-cfg="control.gripStep" data-scale="100" data-unit=" %" min="0.005"
 								max="0.05" step="0.005">
+						</div>
+					</div>
+					<div class="pane" data-pane="cameras">
+						<div class="field">
+							<label>Caméra principale (grand cadre)</label>
+							<select id="camPrimarySelect" data-cfg="cameras.primaryId" data-type="int"></select>
+						</div>
+						<div class="field">
+							<label>Caméra secondaire (vignette)</label>
+							<select id="camSecondarySelect" data-cfg="cameras.secondaryId" data-type="int"></select>
+						</div>
+						<div class="field">
+							<small id="camListHint">Aucune caméra détectée pour l'instant — branche-la sur le PC robot,
+								elle apparaît ici automatiquement en quelques secondes (pas de redémarrage
+								nécessaire).</small>
 						</div>
 					</div>
 					<div class="pane" data-pane="joystick">

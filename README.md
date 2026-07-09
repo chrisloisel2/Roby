@@ -7,23 +7,28 @@ GELLO, caméra et interface web. Deux PC : opérateur et robot.
 [Joystick + GELLO]
         v
 [PC opérateur]  input_agent.py · web_server.py · zenohd
-        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (2 caméras, 1 connexion, port 8765)
+        |  Zenoh TCP (base/bras/état)      ^  WebSocket direct (N caméras, 1 connexion, port 8765)
         v                                  |
 [PC robot]      robot_agent.py (base) · arm_agent.py (bras) · camera_pub.py
         v
-[Robot + bras + 2 caméras]
+[Robot + bras + N caméras USB, découvertes automatiquement]
 ```
 
-Seuls base/bras/état passent par Zenoh + web_server.py. Les DEUX caméras
-sont servies par `camera_pub.py` sur une seule **connexion WebSocket
-directe** navigateur <-> robot (pas de hop Zenoh ni web_server.py sur ce
-chemin) — voir [Structure](#structure) et la table des clés Zenoh plus bas.
-Une seule connexion pour les deux flux, volontairement (pas deux sockets
-séparés) : les deux caméras reçoivent alors exactement le même traitement
-réseau (même connexion TCP, même fenêtre d'écriture, même ordonnancement
-asyncio) au lieu de deux sockets indépendants qui pourraient chacun dériver
-à leur rythme. Chaque message est `[1 octet cam_id][JPEG]` ; le navigateur
-démultiplexe par ce préfixe (`operator/web/static/js/videoMux.js`).
+Seuls base/bras/état passent par Zenoh + web_server.py. TOUTES les caméras
+détectées sont servies par `camera_pub.py` sur une seule **connexion
+WebSocket directe** navigateur <-> robot (pas de hop Zenoh ni
+web_server.py sur ce chemin) — voir [Structure](#structure) et la table
+des clés Zenoh plus bas. Une seule connexion pour tous les flux,
+volontairement (pas un socket par caméra) : chaque caméra reçoit alors
+exactement le même traitement réseau (même connexion TCP, même fenêtre
+d'écriture, même ordonnancement asyncio) au lieu de sockets indépendants
+qui pourraient chacun dériver à leur rythme. Chaque message binaire est
+`[1 octet cam_id][JPEG]` ; le navigateur démultiplexe par ce préfixe
+(`operator/web/static/js/videoMux.js`), qui reçoit aussi un message texte
+JSON listant les caméras actuellement détectées (id, nom V4L2,
+résolution) -- **Réglages (⚙) > Caméras** dans la page opérateur laisse
+choisir laquelle est affichée en grand cadre et laquelle en vignette (voir
+§ Robot réel plus bas pour le détail de la découverte côté robot).
 
 `robot_agent.py` (base) et `arm_agent.py` (bras) sont deux process **séparés**
 sur le PC robot, avec chacun son propre watchdog de sécurité local — voir
@@ -122,10 +127,10 @@ NO_BASE=1     OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # bras + camé
 CAMERA_ONLY=1 scripts/start_robot.sh                              # caméra(s) seules (pas d'OPERATOR_IP requis)
 ```
 
-`camera_pub.py` sert par défaut la caméra avant seule ; la seconde caméra
-ne démarre que si `SECOND_CAMERA_ID` ou `SECOND_NAME_FILTER` est configuré
-(voir plus bas) -- sinon un message dans `logs/camera_pub.log` te le
-rappelle à chaque démarrage.
+`camera_pub.py` découvre automatiquement toutes les caméras UVC branchées
+sur le PC robot (aucune configuration requise) -- voir plus bas. Quelle
+caméra détectée s'affiche dans le grand cadre vs. la vignette se choisit
+côté opérateur, dans **Réglages (⚙) > Caméras**.
 
 La page opérateur se connecte à la connexion caméra partagée via
 `?robotIp=<ip-robot>` dans l'URL (port unique 8765 pour les deux flux --
@@ -171,37 +176,50 @@ export OPERATOR_IP=<ip_pc_operateur>
 .venv/bin/python3 robot/robot_agent.py
 ```
 
-`camera_pub.py` de ce dépôt fonctionne avec la caméra USB avant branchée
-sur ce robot (HSTD USB3.0), capturée en 1920x1200 et servie directement au
+`camera_pub.py` de ce dépôt découvre **automatiquement** toutes les
+caméras UVC branchées sur le PC robot et les sert directement au
 navigateur (`ws://<ip-robot>:8765`, pas de Zenoh sur ce chemin — n'a donc
-pas besoin de `OPERATOR_IP`). Deux pièges rencontrés, tous deux déjà
-corrigés dans le code (`robot/uvc_camera_server.py`) : ne pas forcer
-`CAP_PROP_FPS` via `cap.set()` (casse la négociation de la pipeline
-GStreamer sur cette caméra à cette résolution), et l'index `/dev/videoN`
-n'est pas fiable d'un boot à l'autre (renumérotation USB) — chaque caméra
-sonde et retient automatiquement le premier index qui délivre une vraie
-frame.
+pas besoin de `OPERATOR_IP`). Deux pièges rencontrés sur la caméra avant
+de ce robot (HSTD USB3.0), tous deux déjà corrigés dans le code
+(`robot/uvc_camera_server.py`) : ne pas forcer `CAP_PROP_FPS` via
+`cap.set()` (casse la négociation de la pipeline GStreamer sur cette
+caméra à cette résolution), et l'index `/dev/videoN` n'est pas fiable d'un
+boot à l'autre (renumérotation USB) — la découverte sonde et retient
+automatiquement chaque index qui délivre une vraie frame.
 
-Une **seconde caméra USB** générique (n'importe quel UVC standard) peut
-être branchée sur le même PC robot et servie sur la même connexion,
-multiplexée avec la caméra avant (voir le diagramme en tête de fichier).
-Comme les deux caméras partagent le même sondage d'index, `camera_pub.py`
-**refuse par défaut de démarrer la seconde en sondage non filtré** (une
-course entre les deux threads de capture pourrait leur faire échanger
-silencieusement leurs caméras d'un lancement à l'autre) -- tant que
-`SECOND_CAMERA_ID` ou `SECOND_NAME_FILTER` n'est pas configuré, seule la
-caméra avant tourne, avec un rappel dans `logs/camera_pub.log` à chaque
-démarrage. Pour l'activer : branche la seconde caméra, relance, regarde les
-lignes `probe /dev/videoN` du log (elles listent le vrai nom V4L2 de
-**chaque** index, y compris ceux qu'elle ignore -- ce nom n'est PAS le même
-que celui affiché par `lsusb`, confirmé empiriquement le 2026-07-09), puis
-règle dans `robot/camera_pub.py` soit `SECOND_NAME_FILTER` (si le nom
-diffère de celui de la caméra avant) soit directement
-`SECOND_CAMERA_ID=<index>` (si les deux caméras partagent un nom
-générique identique -- le sondage par nom ne peut alors pas les
-distinguer). Résolution et qualité JPEG de la seconde caméra dans
-`camera_pub.py` sont un point de départ -- le bloc "Camera configuration"
-du log affiche ce qui a été réellement négocié.
+**Découverte dynamique** (2026-07-10, `CameraManager` dans
+`robot/uvc_camera_server.py`) : un unique thread de découverte sonde
+toutes les quelques secondes (`discover_every_sec`, 3s par défaut) les
+index `/dev/videoN` pas encore réclamés par une caméra déjà active, et
+promeut automatiquement en caméra diffusée tout index qui s'ouvre **et**
+délivre une vraie frame -- pas de redémarrage, pas de variable d'env à
+configurer : brancher une seconde (ou une N-ième) caméra USB la fait
+apparaître d'elle-même. Comme un seul thread sonde les index les uns après
+les autres (contrairement à l'ancien design où chaque caméra avait son
+propre thread d'auto-sondage), deux caméras ne peuvent plus se
+"voler" silencieusement leur index l'une à l'autre -- ce risque de course
+est ce qui forçait l'ancien réglage manuel `SECOND_CAMERA_ID`/
+`SECOND_NAME_FILTER`, devenu inutile et supprimé. Une caméra débranchée
+(plus aucune frame pendant `lost_after_sec`, 5s par défaut) est retirée de
+la liste automatiquement, ce qui libère son index pour une redécouverte si
+elle est rebranchée.
+
+**Quelle caméra joue quel rôle** (grand cadre "principale" vs. vignette
+"secondaire") est un réglage **côté opérateur**, pas robot : le serveur
+envoie la liste des caméras détectées (id = index `/dev/videoN`, nom V4L2,
+résolution négociée) sur la même connexion WebSocket que la vidéo, sous
+forme d'un message JSON à part (`operator/web/static/js/videoMux.js`) --
+**Réglages (⚙) > Caméras** dans la page opérateur liste les caméras
+détectées par leur nom et laisse choisir laquelle est "principale" et
+laquelle est "secondaire" (ou "Aucune" pour masquer la vignette).
+`operator/web/static/js/cameraRoles.js` fait la résolution (préférence
+sauvegardée -> retombe sur "Auto", la plus petite id disponible, si la
+caméra choisie a été débranchée). Résolution/qualité JPEG de capture
+(`CAMERA_WIDTH`/`CAMERA_HEIGHT`/`CAMERA_JPEG_QUALITY`, variables d'env
+optionnelles de `camera_pub.py`, appliquées à toutes les caméras
+indifféremment) sont juste un point de départ -- le bloc "Camera
+configuration" du log affiche ce qui a été réellement négocié par chaque
+caméra.
 
 ## Bras GELLO -> reBot B601 (leader-follower)
 
@@ -348,10 +366,15 @@ pilotage clavier + pavé à l'écran + manette + GELLO.
 
 Toute la configuration de l'UI passe par un **store central versionné**
 (`roby.config.v2` en localStorage, modules `static/js/config.js` +
-`settings.js`) exposé dans le panneau ⚙ du header, en quatre onglets :
+`settings.js`) exposé dans le panneau ⚙ du header, en cinq onglets :
 
 - **Contrôle** : fréquence d'envoi des commandes (10–50 Hz), vitesse max au
   chargement, mémorisation de la vitesse, pas de la pince ;
+- **Caméras** : quelle caméra détectée (par nom, découverte automatiquement
+  côté robot — voir § Robot réel) s'affiche en grand cadre ("principale")
+  et laquelle en vignette ("secondaire", ou "Aucune" pour la masquer) ;
+  liste tenue à jour en direct par `videoMux.js`, aucun redémarrage requis
+  quand une caméra est branchée/débranchée ;
 - **Manette** : zone morte des axes (le mapping par action reste dans le
   panneau Manette de la page, avec les valeurs brutes en direct) ;
 - **GELLO** : débit série, délai de boot Arduino, lissage, marge aux butées,
@@ -447,11 +470,12 @@ le matériel réel) exactement, et celui-ci n'en a pas non plus. Seul
   des no-op **volontaires** : le bras est piloté par le process séparé
   `arm_agent.py` (voir [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower)),
   pas par `robot_agent.py`.
-- Caméras : JPEG des deux caméras (avant 1920×1200 + seconde optionnelle)
-  servi directement au navigateur par `camera_pub.py` sur une seule
-  connexion WebSocket (`:8765`), plus de hop Zenoh ni web_server.py sur ce
-  chemin — Zenoh garde les commandes, l'état, le heartbeat et la
-  supervision.
+- Caméras : JPEG de toutes les caméras découvertes automatiquement
+  (voir § Robot réel plus haut), servi directement au navigateur par
+  `camera_pub.py` sur une seule connexion WebSocket (`:8765`), plus de hop
+  Zenoh ni web_server.py sur ce chemin — Zenoh garde les commandes,
+  l'état, le heartbeat et la supervision. Rôle principale/secondaire
+  choisi côté opérateur (Réglages > Caméras), pas figé côté robot.
 
 ## Plan de réalisation
 

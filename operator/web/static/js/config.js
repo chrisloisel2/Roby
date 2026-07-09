@@ -47,6 +47,17 @@ export const DEFAULTS = Object.freeze({
 			btnDeadman: 0, btnStop: 1, btnReset: 2, btnGripOpen: 3, btnGripClose: 4,
 		},
 	},
+	cameras: {
+		// Which discovered camera (cam_id = its /dev/videoN index on the
+		// robot, see videoMux.js's camera_list messages) plays which UI
+		// role. -1 = auto (lowest id / next-lowest id -- see
+		// cameraRoles.js), -2 = none (secondary only: no
+		// picture-in-picture box at all). An explicit id that's no longer
+		// in the discovered list (camera unplugged/renamed) also falls
+		// back to auto rather than showing nothing.
+		primaryId: -1,
+		secondaryId: -1,
+	},
 	gello: {
 		baudRate: 115200,
 		bootDelayMs: 2500,   // opening the port resets the Arduino (DTR) — same wait as gello_reader.py
