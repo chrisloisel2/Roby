@@ -4,10 +4,11 @@
 # Set OPERATOR_IP to the operator PC address, e.g.:
 #     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh
 #
-# Two opt-out flags, for when a CAN adapter is unplugged/misbehaving and you
+# Opt-out flags, for when a CAN adapter is unplugged/misbehaving and you
 # still want the rest of the stack up rather than being blocked entirely by
 # the fail-fast checks below:
 #     NO_ARM=1      OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # base + caméras, pas de bras
+#     NO_BASE=1     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # bras + caméras, pas de base (ex: base CAN en panne, tu veux quand même tester le bras)
 #     CAMERA_ONLY=1 scripts/start_robot.sh                              # caméras seules (pas d'OPERATOR_IP requis : camera_pub.py ne parle pas Zenoh)
 #
 # camera_pub.py always runs regardless of these flags, same as before --
@@ -43,6 +44,7 @@ cd "$(dirname "$0")/.."
 
 CAMERA_ONLY="${CAMERA_ONLY:-0}"
 NO_ARM="${NO_ARM:-0}"
+NO_BASE="${NO_BASE:-0}"
 RUN_BASE=1
 RUN_ARM=1
 if [ "$CAMERA_ONLY" = "1" ]; then
@@ -51,6 +53,9 @@ if [ "$CAMERA_ONLY" = "1" ]; then
 fi
 if [ "$NO_ARM" = "1" ]; then
     RUN_ARM=0
+fi
+if [ "$NO_BASE" = "1" ]; then
+    RUN_BASE=0
 fi
 
 if { [ "$RUN_BASE" = "1" ] || [ "$RUN_ARM" = "1" ]; } && [ -z "${OPERATOR_IP:-}" ]; then
@@ -159,7 +164,7 @@ if [ "$RUN_BASE" = "1" ]; then
         echo "start_robot.sh: robot_agent.py s'est arrêté immédiatement -- ABANDON." >&2
         echo "  --- $AGENT_LOG ---" >&2
         cat "$AGENT_LOG" >&2
-        echo "  (NO_ARM=1 ou CAMERA_ONLY=1 pour continuer sans attendre le CAN de la base)" >&2
+        echo "  (NO_BASE=1 pour continuer sans la base -- ex: tester le bras seul pendant que son CAN est en panne)" >&2
         exit 1
     fi
     echo "start_robot.sh: robot_agent.py démarré (pid $AGENT_PID)." >&2

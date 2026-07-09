@@ -111,13 +111,14 @@ OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra(s) + bras (
 OPERATOR_IP=192.168.15.106 scripts/start_arm.sh     # bras seul -- voir section dédiée, séparé exprès
 ```
 
-`start_robot.sh` a deux flags d'opt-out, pour quand un adaptateur CAN est
+`start_robot.sh` a des flags d'opt-out, pour quand un adaptateur CAN est
 débranché/en panne et que tu veux quand même le reste de la stack au lieu
 d'être bloqué par les vérifications fail-fast. `camera_pub.py` tourne dans
-tous les cas, y compris ces deux modes (pas besoin d'OPERATOR_IP) :
+tous les cas, y compris ces modes (pas besoin d'OPERATOR_IP) :
 
 ```bash
 NO_ARM=1      OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # base + caméra(s), pas de bras
+NO_BASE=1     OPERATOR_IP=192.168.15.106 scripts/start_robot.sh   # bras + caméra(s), pas de base (ex: CAN de la base en panne, tester le bras seul)
 CAMERA_ONLY=1 scripts/start_robot.sh                              # caméra(s) seules (pas d'OPERATOR_IP requis)
 ```
 
