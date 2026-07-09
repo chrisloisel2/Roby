@@ -216,53 +216,67 @@ cette calibration.
 
 ```text
 GELLO (série, RAW firmware)                    B601 (CAN, PC robot)
-      |  lecture série BRUTE, aucune calibration cote navigateur/input_agent
+      |  lecture série BRUTE, aucun calcul cote navigateur/input_agent
       v
 navigateur (gello.js -> armLink.js) ou input_agent.py (gello_reader.py -> ArmLink)
       |  WebSocket direct ws://<ip-robot>:8767, {"raw": "<ligne firmware>"} (PAS Zenoh)
       v
-arm_agent.py : vraie classe lerobot GelloAs5600RawLeader.get_action() --send_action()--> follower
+arm_agent.py -> start_teleoperationV2.run_teleoperation() (boucle de
+      start_teleoperation.py, inchangée) -> follower
 ```
 
-Les lignes série **brutes et non calibrées** du GELLO voyagent en
+Les lignes série **brutes et non interprétées** du GELLO voyagent en
 **WebSocket direct** navigateur/input_agent.py <-> `arm_agent.py`, comme la
 caméra -- `robot/cmd/arm` (Zenoh) n'existe plus. `robot/cmd/stop` et
 `robot/cmd/reset` (E-stop / réarmement) restent en revanche sur Zenoh,
 **inchangés** : ils sont partagés avec la base, et les déplacer aurait
 découplé cet arrêt d'urgence commun.
 
-**La calibration GELLO se fait maintenant dans un seul endroit** :
-`arm_agent.py` instancie la VRAIE classe lerobot `GelloAs5600RawLeader`
-(pas une réimplémentation), lui injecte directement les lectures brutes
-reçues par WebSocket dans son dict interne `_raw_angles` (le même que
-remplirait son propre `_reader_loop()` sur un port série local), puis
-appelle son vrai `get_action()` -- dépliage de la couture 0/360°, clip aux
-butées, lissage, sens/échelle/offset, tout le code lerobot, inchangé.
-Le fichier de calibration (`~/.cache/huggingface/lerobot/calibration/
-teleoperators/gello_as5600_raw_leader/<GELLO_TELEOP_ID>.json`, même fichier
-que `start_teleoperation.py` utilise) se charge automatiquement -- plus de
-copie dupliquée dans ce dépôt (`operator/gello_calibration.json` est
-maintenant sans usage, gardé seulement comme trace).
+**Historique (2026-07-09/10)** — deux versions précédentes de `arm_agent.py`
+ne fonctionnaient pas correctement en usage réel, malgré des tests
+unitaires qui passaient :
+1. une réimplémentation JS/Python de la calibration GELLO, qui portait en
+   fait la MAUVAISE classe lerobot (`GelloAs5600Leader` au lieu de
+   `GelloAs5600RawLeader` — firmware différent, pas de dépliage de la
+   couture 0/360°) ;
+2. après correction de (1), une version qui appelait quand même la bonne
+   classe mais **sans jamais appeler `teleop.connect()`** (injection
+   manuelle dans `teleop._raw_angles`, `teleop.leader_smooth` implicite à
+   0.15 au lieu du `1` par défaut du script de référence).
 
-**Pourquoi ce détour** (2026-07-09) : une première version faisait le calcul
-de calibration côté navigateur/`gello_reader.py` (réimplémentation portée à
-la main de `GelloAs5600RawLeader.get_action()`). Cette réimplémentation
-avait un vrai bug -- elle portait en fait la MAUVAISE classe lerobot
-(`GelloAs5600Leader`, pas `...RawLeader` : firmware différent, pas de
-dépliage de couture), ce qui donnait un mouvement erratique déconnecté du
-GELLO. Faire tourner la vraie classe lerobot côté robot, avec les
-navigateurs/`input_agent.py` en simples relais de données brutes, supprime
-cette classe entière de bug -- il n'y a plus qu'un seul endroit qui fait ce
-calcul, et c'est le code lerobot lui-même.
+L'utilisateur a alors validé une base de référence en dehors de ce dépôt :
 
-`arm_agent.py` construit le follower via `make_robot_from_config()`, comme
-`~/03_JelloSoft/rebot_lerobot/scripts/start_teleoperation.py` (le script de
-téléop de référence sur ce matériel), et reproduit sa boucle exactement :
-`obs -> teleop.get_action() -> teleop_action_processor -> robot_action_processor
--> send_action()`. Seule différence avec ce script : `teleop.get_action()` lit
-ses données depuis le WebSocket au lieu d'un port série local
-(`teleop.connect()` n'est jamais appelé -- juste `teleop.ser = object()`
-pour satisfaire son décorateur `@check_if_not_connected`).
+```bash
+# Sur le PC où le GELLO est branché (ici via socat, IP/port a adapter) :
+socat TCP-LISTEN:9999,reuseaddr,fork OPEN:/dev/cu.usbserial-2130,raw,ispeed=115200,ospeed=115200,echo=0
+# Sur le PC robot :
+python start_teleoperation.py --teleop-port socket://<ip-pc-gello>:9999
+```
+
+Le script de référence **non modifié**, alimenté par un relais socat
+TCP<->série. `robot/start_teleoperationV2.py` (dans ce dépôt, PAS dans
+`~/03_JelloSoft/rebot_lerobot/scripts/` — copie unique et suivie par git,
+pour ne jamais risquer un doublon qui dérive en silence, comme
+`operator/gello_calibration.json` avant lui) reproduit cette base
+**exactement**, avec un seul changement structurel : `teleop.connect()`
+compose vers un petit serveur TCP local (`SerialBridge`) que NOUS
+alimentons depuis un WebSocket, au lieu de composer vers socat.
+`socket://` est le MÊME mécanisme pyserial qu'un relais socat -- vérifié
+directement (`SerialBridge` + `serial.serial_for_url("socket://...")`
+livre des lignes identiques bit à bit) -- donc `connect()` et son
+`_reader_loop()` tournent réellement, comme avec socat. La boucle de
+téléopération elle-même (`obs -> teleop.get_action() ->
+teleop_action_processor -> robot_action_processor -> send_action()`) est
+celle de `start_teleoperation.py`, non modifiée.
+
+`arm_agent.py` ne fait plus AUCUNE logique de téléopération lui-même : il
+importe `start_teleoperationV2.run_teleoperation()` et l'enrobe juste du
+nécessaire pour l'E-stop/reset Zenoh (partagés avec la base) et le
+heartbeat `robot/arm/state`, via trois hooks optionnels de
+`run_teleoperation()` (`stop_event`, `on_tick`, `on_ready`) qui ne
+modifient pas sa boucle -- ils sont des no-op quand absents, donc lancer
+`start_teleoperationV2.py` seul (sans arm_agent.py) se comporte comme le
+script de référence.
 
 **Pourquoi pas la même connexion que la caméra** : `arm_agent.py` doit
 tourner sous l'env conda `lerobot` (RebotB601Follower/torch) alors que
@@ -277,12 +291,12 @@ philosophie ("direct, pas de hop Zenoh") mais pas le même socket.
 Points clés :
 
 - **Deux process séparés côté robot**, volontairement : `arm_agent.py`
-  réutilise `RebotB601Follower` tel quel, qui importe le package `lerobot`
-  complet (dépendances lourdes, dont torch) — hors de question de mélanger
-  ça avec la boucle 100Hz déjà validée de `robot_agent.py` (base). Doit donc
-  tourner avec le python de l'env conda `lerobot`, pas le `.venv` du projet
-  (voir `scripts/start_arm.sh`, override `ARM_PYTHON=` si le chemin de l'env
-  diffère). Cet env a maintenant aussi besoin du paquet `websockets`
+  importe le package `lerobot` complet (dépendances lourdes, dont torch) —
+  hors de question de mélanger ça avec la boucle 100Hz déjà validée de
+  `robot_agent.py` (base). Doit donc tourner avec le python de l'env conda
+  `lerobot`, pas le `.venv` du projet (voir `scripts/start_arm.sh`,
+  override `ARM_PYTHON=` si le chemin de l'env diffère). Cet env a
+  maintenant aussi besoin du paquet `websockets`
   (`~/miniconda3/envs/lerobot/bin/pip install websockets`) -- absent par
   défaut, `arm_agent.py` ne démarrera pas sans.
 - **`gello_reader.py` ne dépend pas de lerobot et ne fait plus aucun calcul** :
@@ -299,17 +313,20 @@ Points clés :
   de filtre de lissage côté navigateur).
 - **Gating indépendant de la base** : contrairement à `robot/cmd/base`, le
   bras n'est **pas** gaté par le homme-mort manette (piloter un bras 7 DOF
-  demande les deux mains). `arm_agent.py` a son propre watchdog de fraîcheur
-  (`ARM_CMD_TIMEOUT_SEC`), basé sur la dernière ligne brute reçue par
-  WebSocket : sans ligne fraîche, il arrête juste d'envoyer de nouvelles
-  cibles (les moteurs Damiao tiennent seuls leur dernière consigne — rien
-  d'équivalent au ramp-to-zero de la base n'est nécessaire).
+  demande les deux mains). L'E-stop (`stop_event`, mis à jour par
+  `robot/cmd/stop`/`robot/cmd/reset`) coupe l'envoi de nouvelles cibles et
+  appelle `disable_torque()` une fois (edge-triggered) ; contrairement aux
+  versions précédentes, **il n'y a plus de watchdog de fraîcheur sur les
+  données GELLO elles-mêmes** -- `start_teleoperation.py` n'en a pas non
+  plus, et c'est la configuration confirmée fonctionner par l'utilisateur.
   `robot/cmd/stop`/`robot/cmd/reset` restent **partagés** avec la base : un
   seul arrêt d'urgence coupe les deux.
-- **Filet de sécurité supplémentaire** pour ce premier vrai essai sur ce
-  chemin de pilotage : `max_relative_target` (quelques degrés par tick, voir
-  `ARM_MAX_RELATIVE_TARGET_DEG` dans `arm_agent.py`), en plus du lissage déjà
-  fait par `GelloAs5600RawLeader.get_action()`.
+- **Pas de `max_relative_target`** non plus (le filet de sécurité logiciel
+  des versions précédentes) : `start_teleoperation.py` n'en configure pas
+  non plus. Facile à réintroduire (kwarg de `RebotB601FollowerRobotConfig`
+  dans `start_teleoperationV2.py`) si besoin, mais volontairement absent
+  pour l'instant plutôt que réintroduit en silence -- ça ne faisait pas
+  partie de ce qui a été concrètement validé.
 
 > Avant tout essai : `connect()` active le couple moteur du bras
 > **immédiatement** — bras dégagé/soutenu, comme pour la base.
@@ -415,12 +432,14 @@ Vitesses bornées côté robot (`MAX_VEL`/`ROT_VEL` dans `robot_agent.py`).
 Avant tout essai réel : ajouter un **arrêt d'urgence physique** en plus de
 ces protections logicielles.
 
-Le bras a son **propre watchdog local**, dans `arm_agent.py`, indépendant de
-celui de `robot_agent.py` (process séparé) : pas de nouvelle consigne
-envoyée sans commande WebSocket fraîche (`ARM_CMD_TIMEOUT_SEC`), plus
-`max_relative_target` comme filet en plus du lissage déjà fait côté GELLO.
-`robot/cmd/stop` coupe aussi le bras (`disable_torque()`) ; `robot/cmd/reset`
-le réarme. Détails : [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower).
+Le bras **n'a pas** de watchdog de fraîcheur sur les données GELLO
+elles-mêmes (contrairement à la base) : `arm_agent.py` délègue toute sa
+boucle à `start_teleoperationV2.run_teleoperation()`, qui reproduit
+`start_teleoperation.py` (le script de référence confirmé fonctionner sur
+le matériel réel) exactement, et celui-ci n'en a pas non plus. Seul
+`robot/cmd/stop` (Zenoh, partagé avec la base) coupe le bras
+(`disable_torque()`, edge-triggered) ; `robot/cmd/reset` le réarme
+(`configure()`). Détails : [Bras GELLO -> reBot B601](#bras-gello--rebot-b601-leader-follower).
 
 ## Notes / limites
 
