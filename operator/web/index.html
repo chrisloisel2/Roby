@@ -273,6 +273,13 @@
 					</div>
 					<div class="pane" data-pane="cameras">
 						<div class="field">
+							<label>IP du robot</label>
+							<input type="text" data-cfg="robot.ip" data-reload="1" placeholder="ex. 192.168.30.101">
+							<small>utilisée pour le flux caméra et le lien GELLO direct (ports 8765/8767) — mémorisée
+								sur cette machine/ce navigateur. Le paramètre <span class="kbd">?robotIp=</span> dans
+								l'URL reste prioritaire si présent. Laisser vide pour la valeur par défaut.</small>
+						</div>
+						<div class="field">
 							<label>Caméra principale (grand cadre)</label>
 							<select id="camPrimarySelect" data-cfg="cameras.primaryId" data-type="int"></select>
 						</div>

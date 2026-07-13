@@ -110,13 +110,26 @@ fi
 # Best-effort graceful stop first: robot_agent.py's/arm_agent.py's
 # SIGINT/KeyboardInterrupt handlers disable their motors before exiting, and
 # camera_pub.py's releases the camera handle -- both matter more than just
-# tidiness. Escalates to SIGKILL if a match is still alive after ~1.5s so
-# this is idempotent either way (robot_agent.py's own control loop starts
-# every wheel at commanded-zero regardless, per its stop_robot() fail-safe,
-# and arm_agent.py sends no new targets without a fresh command either way,
-# so a forced kill here is not itself unsafe -- just less clean). Always
-# tried for all three regardless of which flags this run uses, so a leftover
-# process from a previous full run doesn't keep racing this one.
+# tidiness. Escalates to SIGKILL if a match is still alive after ~1.5s
+# (robot_agent.py's own control loop starts every wheel at commanded-zero
+# regardless, per its stop_robot() fail-safe, and arm_agent.py sends no new
+# targets without a fresh command either way, so a forced kill here is not
+# itself unsafe -- just less clean). Always tried for all four regardless of
+# which flags this run uses, so a leftover process from a previous full run
+# doesn't keep racing this one.
+#
+# Critically: SIGKILL is NOT verified to actually work by itself -- a
+# process blocked in a kernel-side blocking syscall (a CAN read, the mast's
+# serial read, a wedged V4L2/USB camera read) stays alive in uninterruptible
+# sleep (state D) until that syscall returns, no matter the signal. Blindly
+# continuing past that (the old behavior here: sleep a fixed 0.3s and move
+# on regardless) let a genuinely-stuck old process keep holding the exact
+# CAN bus / serial port / camera device the new instance is about to open,
+# so the new one either fails its fail-fast startup check for a confusing
+# reason ("port busy", not "didn't start") or -- worse -- both instances end
+# up alive and racing each other over the same hardware. So: actually
+# reconfirm the pattern is gone after SIGKILL, and if it still isn't, abort
+# loudly instead of starting a second instance on top of a stuck one.
 stop_running() {
     local pattern="$1" pids
     pids=$(pgrep -f "$pattern" || true)
@@ -128,7 +141,19 @@ stop_running() {
         sleep 0.3
     done
     kill -9 $pids 2>/dev/null || true
-    sleep 0.3
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -f "$pattern" >/dev/null || return 0
+        sleep 0.3
+    done
+    echo "start_robot.sh: '$pattern' ($pids) toujours vivant ~4.5s après kill -9 -- ABANDON." >&2
+    echo "  probablement bloqué en E/S noyau (CAN / série mât / device caméra) plutôt que" >&2
+    echo "  simplement lent à mourir -- démarrer une nouvelle instance par-dessus se" >&2
+    echo "  terminerait en conflit sur le même device, pas en propreté. État du process :" >&2
+    local p
+    for p in $pids; do ps -o pid,stat,cmd -p "$p" 2>/dev/null >&2 || true; done
+    echo "  Débloque/débranche-rebranche le matériel concerné, ou 'kill -9 $pids' à la main" >&2
+    echo "  puis relance." >&2
+    exit 1
 }
 
 stop_running "robot/robot_agent.py"

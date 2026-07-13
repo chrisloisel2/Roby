@@ -98,15 +98,23 @@ export function initSettings({ mux } = {}) {
 
 	inputs.forEach((input) => {
 		const path = input.dataset.cfg;
-		const event = input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input";
+		// data-reload fields (e.g. robot.ip) commit on "change" (blur/Enter)
+		// like a select/checkbox, not "input" (every keystroke) -- reloading
+		// the page mid-keystroke on a half-typed IP would be actively
+		// counterproductive, see the reload block below.
+		const event = input.tagName === "SELECT" || input.type === "checkbox" || input.dataset.reload ? "change" : "input";
 		input.addEventListener(event, () => {
 			let value;
 			if (input.type === "checkbox") value = input.checked;
 			else if (input.type === "range") value = parseFloat(input.value);
 			else if (input.dataset.type === "int") value = parseInt(input.value, 10);
-			else value = input.value;
+			else value = input.value.trim();
 			config.set(path, value);
 			if (input.type === "range") refreshOut(path, input, value);
+			if (input.dataset.reload) {
+				toast("Réglage appliqué — rechargement…", "good");
+				setTimeout(() => location.reload(), 600);
+			}
 		});
 	});
 

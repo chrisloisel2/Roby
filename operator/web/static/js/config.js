@@ -17,6 +17,15 @@ const STORE_KEY = "roby.config.v2";
 
 export const DEFAULTS = Object.freeze({
 	version: 2,
+	robot: {
+		// Persisted per browser/machine so a fresh operator PC only needs
+		// this typed in once (Réglages > Caméras) instead of everyone having
+		// to remember to append ?robotIp=... to the URL every time -- see
+		// robotIp.js for the full precedence (URL param still wins if
+		// present, for one-off overrides). Empty string = not set, fall
+		// through to the URL param / hardcoded default.
+		ip: "",
+	},
 	control: {
 		// Matches arm_agent.py's own 50Hz control loop and stays well under
 		// the robot watchdog's CMD_TIMEOUT_SEC (0.3s base / 0.3s arm). Only

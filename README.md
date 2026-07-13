@@ -140,10 +140,14 @@ sur le PC robot (aucune configuration requise) -- voir plus bas. Quelle
 caméra détectée s'affiche dans le grand cadre vs. la vignette se choisit
 côté opérateur, dans **Réglages (⚙) > Caméras**.
 
-La page opérateur se connecte à la connexion caméra partagée via
-`?robotIp=<ip-robot>` dans l'URL (port unique 8765 pour les deux flux --
-défaut `169.254.222.31`, voir `DEFAULT_ROBOT_IP` dans
-`operator/web/static/js/videoMux.js`) — à ajuster si l'IP du robot diffère.
+La page opérateur se connecte à la connexion caméra partagée et au lien
+GELLO direct (ports 8765/8767) via l'IP du robot, résolue par
+`operator/web/static/js/robotIp.js` dans cet ordre : `?robotIp=<ip-robot>`
+dans l'URL (override ponctuel) > **Réglages (⚙) > Caméras > IP du robot**
+(mémorisée en local sur cette machine/ce navigateur, recommandé) > défaut
+`169.254.222.31`. Sur une machine opérateur neuve (ou si l'IP du robot a
+changé), renseigne-la une fois dans Réglages plutôt que de trimballer
+`?robotIp=` dans chaque URL/onglet.
 
 `GELLO_PORT` est optionnel : sans lui, `input_agent.py` tourne normalement
 (base + web) mais le bras GELLO reste désactivé (`read_gello_raw_line()`

@@ -19,12 +19,12 @@
 // now, not a fixed "front"/"second"/"third" role.
 
 import { createSocket } from "./net.js";
+import { resolveRobotIp } from "./robotIp.js";
 
-const DEFAULT_ROBOT_IP = "169.254.222.31";
 const PORT = 8765;
 
 export function createVideoMux() {
-	const robotIp = new URLSearchParams(location.search).get("robotIp") || DEFAULT_ROBOT_IP;
+	const robotIp = resolveRobotIp();
 	const frameListeners = new Set(); // Set<(camId, jpegBytes) => void>, fired for every incoming frame regardless of camId
 	const listListeners = new Set(); // Set<(cameras) => void>
 	let cameras = []; // last camera_list snapshot: [{id, name, width, height}, ...]

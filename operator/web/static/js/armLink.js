@@ -23,12 +23,12 @@
 // (the real lerobot code, server-side) removes that whole class of bug.
 
 import { createSocket } from "./net.js";
+import { resolveRobotIp } from "./robotIp.js";
 
-const DEFAULT_ROBOT_IP = "169.254.222.31";
 const ARM_PORT = 8767;
 
 export function createArmLink() {
-	const robotIp = new URLSearchParams(location.search).get("robotIp") || DEFAULT_ROBOT_IP;
+	const robotIp = resolveRobotIp();
 	const sock = createSocket(`ws://${robotIp}:${ARM_PORT}`);
 
 	return {
