@@ -16,7 +16,26 @@ const JOY_ACTIONS = [
 	{ key: "btnReset", label: "Réarmer", kind: "button" },
 	{ key: "btnGripOpen", label: "Pince : ouvrir", kind: "button" },
 	{ key: "btnGripClose", label: "Pince : fermer", kind: "button" },
+	{ key: "btnMastUp", label: "Mât : monter", kind: "button" },
+	{ key: "btnMastDown", label: "Mât : descendre", kind: "button" },
+	{ key: "axisMastToggle", label: "Mât : axe bidirectionnel (bascule)", kind: "axis" },
 ];
+
+// axisMastToggle (tableau `axes`, PAS `buttons`) renvoie une valeur brute qui
+// encode le sens -- mesurée sur la manette de l'opérateur : -1 = monter,
+// 0.14 = descendre. PAS symétrique (comportement brut du hat/bascule), donc
+// on matche chaque valeur cible avec une tolérance plutôt qu'un seuil unique.
+const MAST_AXIS_UP_VALUE = -1;
+const MAST_AXIS_DOWN_VALUE = 0.14;
+const MAST_AXIS_EPS = 0.1;
+
+// "Détection auto mât" (see wiring below): assigns btnMastUp/btnMastDown by
+// HOLD duration instead of the single-press "Assigner" flow every other
+// action uses above -- requested explicitly (hold ~2s on the button you
+// want for up, release, then hold ~2s on the one for down) so it can't
+// mis-fire on a stick returning through center or a stray simultaneous
+// press the way an instant single-press capture could.
+const MAST_DETECT_HOLD_MS = 2000;
 
 export function initJoystick({ onStop, onReset, onGripDelta }) {
 	const $ = (id) => document.getElementById(id);
@@ -29,6 +48,11 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 	let learningKey = null;
 	let joyIndex = null;
 	let prevJoyButtons = [];
+	// null | { phase: "up"|"down", armed: bool, candidateIdx: number|null, candidateSince: ms }
+	// "armed" gates the "down" phase behind a full release first, so holding
+	// the same button through the transition can't silently double-assign it
+	// (see the phase transition in stepMastDetect below).
+	let mastDetect = null;
 
 	joyHead.addEventListener("click", () => {
 		const open = joyBody.classList.toggle("open");
@@ -76,7 +100,7 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 			row.className = "joy-row";
 			const cur = mapping()[a.key];
 			const curText = (cur == null || cur < 0) ? "—" : (a.kind === "axis" ? "axe " + cur : "bouton " + cur);
-			const invHtml = a.kind === "axis"
+			const invHtml = (a.kind === "axis" && a.invKey)
 				? '<label class="inv"><input type="checkbox" id="joyinv-' + a.key + '"' +
 				(mapping()[a.invKey] ? " checked" : "") + '> inv.</label>'
 				: "";
@@ -87,7 +111,7 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 				'<button class="assign" data-key="' + a.key + '">Assigner</button>';
 			wrap.appendChild(row);
 			rowRefs.set(a.key, row.querySelector(".val"));
-			if (a.kind === "axis") {
+			if (a.kind === "axis" && a.invKey) {
 				$("joyinv-" + a.key).addEventListener("change", (e) => setMapping(a.invKey, e.target.checked));
 			}
 		}
@@ -107,6 +131,70 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 		renderJoyRows();
 		toast("Mapping manette réinitialisé");
 	});
+
+	// ---- Mât : détection guidée par maintien (2s monter, puis 2s descendre) ----
+	const detectBtn = $("joyDetectMast");
+	const detectStatus = $("joyDetectStatus");
+	const DETECT_IDLE_LABEL = "🔎 Détection auto mât (maintenir 2s)";
+
+	function cancelMastDetect(msg) {
+		mastDetect = null;
+		detectBtn.classList.remove("listening");
+		detectBtn.textContent = DETECT_IDLE_LABEL;
+		detectStatus.textContent = msg || "";
+	}
+
+	detectBtn.addEventListener("click", () => {
+		if (mastDetect) { cancelMastDetect("Détection annulée."); return; }
+		// Mutually exclusive with the per-action "Assigner" flow below -- both
+		// read the same `activeBtns`, running together would race.
+		learningKey = null;
+		$("joyRows").querySelectorAll(".assign").forEach((b) => { b.classList.remove("listening"); b.textContent = "Assigner"; });
+		mastDetect = { phase: "up", armed: true, candidateIdx: null, candidateSince: 0 };
+		detectBtn.classList.add("listening");
+		detectBtn.textContent = "…annuler la détection";
+		detectStatus.textContent = "Maintiens le bouton MONTER pendant 2 secondes…";
+	});
+
+	// Advances the hold-detection state machine by one poll tick. Called from
+	// poll() below with the current frame's pressed-button list.
+	function stepMastDetect(activeBtns) {
+		const now = Date.now();
+		if (!mastDetect.armed) {
+			// Waiting for a clean release before arming the next phase, so
+			// still holding the just-assigned button can't roll straight into
+			// the next phase's timer.
+			if (activeBtns.length === 0) mastDetect.armed = true;
+			return;
+		}
+		if (activeBtns.length !== 1) {
+			// 0 = nothing held yet, >1 = ambiguous (e.g. brace grip) -- either
+			// way, no single candidate to time right now.
+			mastDetect.candidateIdx = null;
+			return;
+		}
+		const idx = activeBtns[0];
+		if (mastDetect.candidateIdx !== idx) {
+			mastDetect.candidateIdx = idx;
+			mastDetect.candidateSince = now;
+			return;
+		}
+		if (now - mastDetect.candidateSince < MAST_DETECT_HOLD_MS) return;
+
+		if (mastDetect.phase === "up") {
+			finishAssign("btnMastUp", idx);
+			mastDetect = { phase: "down", armed: false, candidateIdx: null, candidateSince: 0 };
+			detectStatus.textContent =
+				`✓ Monter = bouton ${idx}. Relâche, puis maintiens le bouton DESCENDRE pendant 2 secondes…`;
+		} else {
+			finishAssign("btnMastDown", idx);
+			detectStatus.textContent = `✓ Terminé — monter = bouton ${mapping().btnMastUp}, descendre = bouton ${idx}.`;
+			detectBtn.classList.remove("listening");
+			detectBtn.textContent = DETECT_IDLE_LABEL;
+			mastDetect = null;
+			toast("Mapping mât enregistré", "good");
+		}
+	}
 
 	window.addEventListener("gamepadconnected", (e) => {
 		refreshJoyOptions();
@@ -151,7 +239,7 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 	// learn-mode capture, and returns the normalized contribution to send.
 	function poll() {
 		const gp = pollGamepad();
-		const out = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false };
+		const out = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false, mastUp: false, mastDown: false };
 		if (!gp) { joyRaw.textContent = "en attente d'une manette…"; return out; }
 
 		const map = mapping();
@@ -178,6 +266,7 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 				finishAssign(learningKey, activeBtns[0]);
 			}
 		}
+		if (mastDetect) stepMastDetect(activeBtns);
 
 		const axisVal = (idx, inv) => {
 			if (idx == null || idx < 0 || idx >= axes.length) return 0;
@@ -196,6 +285,14 @@ export function initJoystick({ onStop, onReset, onGripDelta }) {
 			out.speed = Math.min(1, Math.max(0, (v + 1) / 2));
 		}
 		out.deadman = btnHeld(map.btnDeadman);
+		out.mastUp = btnHeld(map.btnMastUp);
+		out.mastDown = btnHeld(map.btnMastDown);
+		const axisIdx = map.axisMastToggle;
+		if (axisIdx != null && axisIdx >= 0 && axisIdx < axes.length) {
+			const v = axes[axisIdx];
+			if (Math.abs(v - MAST_AXIS_UP_VALUE) < MAST_AXIS_EPS) out.mastUp = true;
+			else if (Math.abs(v - MAST_AXIS_DOWN_VALUE) < MAST_AXIS_EPS) out.mastDown = true;
+		}
 
 		const pressedNow = buttons.map((b) => b.pressed);
 		const rising = (idx) => idx != null && idx >= 0 && pressedNow[idx] && !prevJoyButtons[idx];

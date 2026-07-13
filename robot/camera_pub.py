@@ -62,7 +62,7 @@ PORT = 8765
 # back via CAMERA_WIDTH/CAMERA_HEIGHT if your network can sustain more and
 # image detail matters more than smoothness for your use case.
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 1280, 720
-DEFAULT_JPEG_QUALITY = 60
+DEFAULT_JPEG_QUALITY = 40
 
 if __name__ == "__main__":
     exclude = os.environ.get("CAMERA_EXCLUDE", "")

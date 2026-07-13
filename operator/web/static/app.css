@@ -302,6 +302,16 @@ main {
 	z-index: 2;
 }
 
+/* Second (tertiary-camera) PiP box: stacked directly above the first one
+   rather than beside it, so it never has to fight for horizontal space on
+   narrow/mobile viewports where the video panel itself is already close to
+   full width. The bottom offset is derived from .video-pip's own
+   bottom/width/aspect-ratio above (12px gap + this box's own height, from
+   width * 9/16 + 12px gap) so it stays correct if those change. */
+.video-pip-2 {
+	bottom: calc(12px + 220px * 9 / 16 + 12px);
+}
+
 .video-pip canvas {
 	position: absolute;
 	inset: 0;
@@ -985,7 +995,8 @@ input[type=range] {
 	color: var(--ink);
 }
 
-.joy-row .assign.listening {
+.joy-row .assign.listening,
+.joy-reset.listening {
 	background: var(--accent);
 	color: #fff;
 	border-color: transparent;

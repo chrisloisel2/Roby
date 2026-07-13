@@ -57,6 +57,17 @@
 						<div class="sub">flux détaché — fenêtre séparée</div>
 					</div>
 				</div>
+				<div class="video-pip video-pip-2" id="videoPip3">
+					<canvas id="cam3" role="img" aria-label="Flux caméra tertiaire"></canvas>
+					<span class="chip pip-label"><span id="camName3">caméra tertiaire</span></span>
+					<button class="icon-btn ghost pip-detach" id="btnDetach3" title="Détacher sur un autre écran">⇱</button>
+					<div class="noSignal show" id="noSignal3">
+						<div class="sub">en attente du flux caméra 3…</div>
+					</div>
+					<div class="noSignal" id="detachedOverlay3">
+						<div class="sub">flux détaché — fenêtre séparée</div>
+					</div>
+				</div>
 				<div class="noSignal show" id="noSignal">
 					<div class="big">AUCUN SIGNAL</div>
 					<div class="sub">en attente du flux caméra du robot…</div>
@@ -172,6 +183,8 @@
 						<div class="joy-raw" id="joyRaw">en attente d'une manette…</div>
 						<div id="joyRows"></div>
 						<button class="joy-reset" id="joyResetMap">↺ réinitialiser le mapping</button>
+						<button class="joy-reset" id="joyDetectMast">🔎 Détection auto mât (maintenir 2s)</button>
+						<div class="joy-raw" id="joyDetectStatus"></div>
 					</div>
 				</section>
 
@@ -264,8 +277,24 @@
 							<select id="camPrimarySelect" data-cfg="cameras.primaryId" data-type="int"></select>
 						</div>
 						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="cameras.primaryRotate180">
+								retourner l'image (180°) — caméra montée à l'envers</label>
+						</div>
+						<div class="field">
 							<label>Caméra secondaire (vignette)</label>
 							<select id="camSecondarySelect" data-cfg="cameras.secondaryId" data-type="int"></select>
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="cameras.secondaryRotate180">
+								retourner l'image (180°) — caméra montée à l'envers</label>
+						</div>
+						<div class="field">
+							<label>Caméra tertiaire (2ᵉ vignette)</label>
+							<select id="camTertiarySelect" data-cfg="cameras.tertiaryId" data-type="int"></select>
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="cameras.tertiaryRotate180">
+								retourner l'image (180°) — caméra montée à l'envers</label>
 						</div>
 						<div class="field">
 							<small id="camListHint">Aucune caméra détectée pour l'instant — branche-la sur le PC robot,

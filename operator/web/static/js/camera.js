@@ -2,8 +2,8 @@
 //
 // Frames arrive over a SHARED WebSocket connection (videoMux.js, direct to
 // robot/camera_pub.py -- not relayed through web_server.py's /ws/*, one
-// fewer hop cuts real latency at this resolution) also used by camera2.js
-// for the second camera -- see videoMux.js for why that's one connection,
+// fewer hop cuts real latency at this resolution) also used by cameraPip.js
+// for the secondary/tertiary cameras -- see videoMux.js for why that's one connection,
 // not two. Which physical camera (cam_id) this tile shows is resolved
 // dynamically (cameraRoles.js: config.js's `cameras.primaryId` preference
 // against the robot's live, auto-discovered camera list) rather than a
@@ -42,6 +42,13 @@ export function initCamera({ setTile, mux }) {
 	const frameStamps = [];
 	let latestCamData = null, camDataSeq = 0, displayedSeq = -1, renderingCam = false;
 	let targetId = null;
+	// Caméra montée à l'envers -> retourner l'image de 180° au dessin
+	// (config.js's cameras.primaryRotate180), un flag lu par
+	// renderCamFrame() plutôt qu'appliqué à la source: rotation par canvas
+	// transform, coût négligeable comparé à ré-encoder côté robot.
+	let rotated180 = false;
+	const applyRotation = () => { rotated180 = !!config.get("cameras.primaryRotate180"); };
+	applyRotation();
 
 	function recomputeTarget() {
 		const cameras = mux.getCameras();
@@ -52,7 +59,10 @@ export function initCamera({ setTile, mux }) {
 		}
 	}
 	mux.onCameraList(recomputeTarget);
-	config.subscribe((path) => { if (path.startsWith("cameras.")) recomputeTarget(); });
+	config.subscribe((path) => {
+		if (path.startsWith("cameras.")) recomputeTarget();
+		if (path === "cameras.primaryRotate180") applyRotation();
+	});
 
 	mux.onAnyFrame((camId, jpegBytes) => {
 		if (camId !== targetId) return;
@@ -83,7 +93,15 @@ export function initCamera({ setTile, mux }) {
 					targetCanvas.width = bitmap.width;
 					targetCanvas.height = bitmap.height;
 				}
-				targetCtx.drawImage(bitmap, 0, 0);
+				if (rotated180) {
+					targetCtx.save();
+					targetCtx.translate(targetCanvas.width, targetCanvas.height);
+					targetCtx.rotate(Math.PI);
+					targetCtx.drawImage(bitmap, 0, 0);
+					targetCtx.restore();
+				} else {
+					targetCtx.drawImage(bitmap, 0, 0);
+				}
 				bitmap.close();
 			} finally {
 				renderingCam = false;

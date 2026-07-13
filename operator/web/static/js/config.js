@@ -45,6 +45,19 @@ export const DEFAULTS = Object.freeze({
 			axisWz: 2, invWz: false,
 			axisSpeed: 3, invSpeed: false,
 			btnDeadman: 0, btnStop: 1, btnReset: 2, btnGripOpen: 3, btnGripClose: 4,
+			// -1 = unassigned: unlike the buttons above (calibrated defaults for
+			// the Thrustmaster T.Flight Stick X), there's no sensible physical
+			// default for the mast -- must be assigned per-pad, see joystick.js's
+			// "Détection auto mât" (hold each button ~2s).
+			btnMastUp: -1, btnMastDown: -1,
+			// Axe unique bidirectionnel (bascule/palonnier, tableau `axes`
+			// du Gamepad API -- PAS `buttons`) dont la VALEUR BRUTE encode le
+			// sens -- voir joystick.js poll() / MAST_AXIS_UP_VALUE /
+			// MAST_AXIS_DOWN_VALUE. Défaut axe 9, mesuré sur la manette de
+			// l'opérateur : valeur -1 = monter, 0.14 = descendre (pas
+			// symétrique -- comportement brut du hat/bascule, pas une
+			// convention qu'on a choisie). -1 (ce champ-ci, l'INDEX) = désactivé.
+			axisMastToggle: 9,
 		},
 	},
 	cameras: {
@@ -57,6 +70,19 @@ export const DEFAULTS = Object.freeze({
 		// back to auto rather than showing nothing.
 		primaryId: -1,
 		secondaryId: -1,
+		// Third role (second PiP box, index.html's videoPip3) -- same AUTO
+		// default as secondaryId, so a 3rd plugged-in camera just shows up
+		// without a settings visit, consistent with the rest of this app's
+		// auto-discovery-first philosophy (see robot/camera_pub.py).
+		tertiaryId: -1,
+		// Caméra montée à l'envers -> retourner l'image de 180°. Réglage
+		// navigateur (canvas transform, coût négligeable) plutôt que côté
+		// robot, cohérent avec le reste de "quel rôle joue quelle caméra"
+		// qui est déjà un réglage opérateur/navigateur (voir cameraRoles.js)
+		// et pas quelque chose qu'on encode dans robot/uvc_camera_server.py.
+		primaryRotate180: false,
+		secondaryRotate180: false,
+		tertiaryRotate180: false,
 	},
 	gello: {
 		baudRate: 115200,

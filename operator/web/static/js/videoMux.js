@@ -12,11 +12,11 @@
 // byte-for-byte identical connection-level treatment (same TCP connection,
 // same backpressure/ordering, same event-loop scheduling) instead of
 // independent WebSockets that could each stall/reconnect/jitter on their
-// own schedule. camera.js and camera2.js each resolve which cam_id they
-// currently want (see cameraRoles.js) and filter onAnyFrame() themselves,
-// rather than each opening their own connection or assuming a fixed id --
-// cam_id is just the discovered camera's own /dev/videoN index now, not a
-// fixed "front"/"second" role.
+// own schedule. camera.js and each cameraPip.js instance resolve which
+// cam_id they currently want (see cameraRoles.js) and filter onAnyFrame()
+// themselves, rather than each opening their own connection or assuming a
+// fixed id -- cam_id is just the discovered camera's own /dev/videoN index
+// now, not a fixed "front"/"second"/"third" role.
 
 import { createSocket } from "./net.js";
 

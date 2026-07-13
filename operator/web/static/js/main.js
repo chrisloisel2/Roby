@@ -4,12 +4,13 @@
 //   net.js       auto-reconnecting WebSockets
 //   videoMux.js  ws://<robot-ip>:8765 (direct to robot, ONE shared connection for every camera,
 //                auto-discovered robot-side -- see robot/uvc_camera_server.py's CameraManager)
-//   cameraRoles.js  resolves which discovered camera plays the primary/secondary UI role,
-//                shared by camera.js/camera2.js (rendering) and settings.js (the picker)
+//   cameraRoles.js  resolves which discovered camera plays the primary/secondary/tertiary UI
+//                role, shared by camera.js/cameraPip.js (rendering) and settings.js (the picker)
 //   camera.js    primary camera -> canvas (latest-frame rendering)
-//   camera2.js   secondary camera -> picture-in-picture canvas (hidden if none assigned)
+//   cameraPip.js secondary + tertiary cameras -> the two picture-in-picture canvases
+//                (initPipCamera instantiated twice below; each hides itself if none assigned)
 //   popoutCanvas.js  shared "detach to another screen" popup window helper,
-//                used by both camera.js and camera2.js
+//                used by both camera.js and cameraPip.js
 //   armLink.js   ws://<robot-ip>:8767 (direct to robot/arm_agent.py) -> raw GELLO lines
 //   status.js    /ws/status -> tiles, banner, arm joint gauges
 //   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control (base/stop/reset/gripper)
@@ -20,7 +21,8 @@
 import { config } from "./config.js";
 import { createVideoMux } from "./videoMux.js";
 import { initCamera } from "./camera.js";
-import { initCamera2 } from "./camera2.js";
+import { initPipCamera } from "./cameraPip.js";
+import { resolvePrimaryId, resolveSecondaryId, resolveTertiaryId } from "./cameraRoles.js";
 import { createArmLink } from "./armLink.js";
 import { initStatus, setTile } from "./status.js";
 import { initControl } from "./control.js";
@@ -32,7 +34,25 @@ const $ = (id) => document.getElementById(id);
 
 const videoMux = createVideoMux();
 const camera = initCamera({ setTile, mux: videoMux });
-initCamera2({ mux: videoMux });
+initPipCamera({
+	mux: videoMux,
+	ids: { canvas: "cam2", noSignal: "noSignal2", detachedOverlay: "detachedOverlay2", btnDetach: "btnDetach2", container: "videoPip", name: "camName2" },
+	resolveTargetId: (cameras) => resolveSecondaryId(cameras, resolvePrimaryId(cameras)),
+	rotateConfigPath: "cameras.secondaryRotate180",
+	defaultName: "caméra secondaire",
+	popoutTitle: "Roby — Caméra secondaire",
+});
+initPipCamera({
+	mux: videoMux,
+	ids: { canvas: "cam3", noSignal: "noSignal3", detachedOverlay: "detachedOverlay3", btnDetach: "btnDetach3", container: "videoPip3", name: "camName3" },
+	resolveTargetId: (cameras) => {
+		const primaryId = resolvePrimaryId(cameras);
+		return resolveTertiaryId(cameras, primaryId, resolveSecondaryId(cameras, primaryId));
+	},
+	rotateConfigPath: "cameras.tertiaryRotate180",
+	defaultName: "caméra tertiaire",
+	popoutTitle: "Roby — Caméra tertiaire",
+});
 const armLink = createArmLink();
 const status = initStatus();
 const control = initControl({ onFullscreen: camera.toggleFullscreen });

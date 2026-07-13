@@ -23,8 +23,8 @@ export function initSettings({ mux } = {}) {
 	const $ = (id) => document.getElementById(id);
 	const modal = $("settingsModal");
 
-	// ---- Caméras: populate the primary/secondary <select>s from the
-	// robot's live, auto-discovered camera list (videoMux.js) -- their
+	// ---- Caméras: populate the primary/secondary/tertiary <select>s from
+	// the robot's live, auto-discovered camera list (videoMux.js) -- their
 	// data-cfg/data-type bindings below are otherwise identical to any
 	// other <select>, this just keeps their <option>s in sync with
 	// whatever's actually plugged in instead of a fixed list. Runs before
@@ -33,9 +33,10 @@ export function initSettings({ mux } = {}) {
 	if (mux) {
 		const primarySelect = $("camPrimarySelect");
 		const secondarySelect = $("camSecondarySelect");
+		const tertiarySelect = $("camTertiarySelect");
 		const hint = $("camListHint");
 		mux.onCameraList((cameras) => {
-			if (!primarySelect || !secondarySelect) return;
+			if (!primarySelect || !secondarySelect || !tertiarySelect) return;
 			const fillOptions = (select, includeNone) => {
 				const current = select.value;
 				select.innerHTML = "";
@@ -48,12 +49,14 @@ export function initSettings({ mux } = {}) {
 			};
 			fillOptions(primarySelect, false);
 			fillOptions(secondarySelect, true);
+			fillOptions(tertiarySelect, true);
 			// Re-apply the persisted config value now that matching
 			// <option>s exist (a plain fillOptions() above only preserves
 			// whatever was already visually selected, not the config on
 			// first run before loadValues() has ever set it).
 			primarySelect.value = String(config.get("cameras.primaryId"));
 			secondarySelect.value = String(config.get("cameras.secondaryId"));
+			tertiarySelect.value = String(config.get("cameras.tertiaryId"));
 			if (hint) {
 				hint.textContent = cameras.length
 					? `${cameras.length} caméra(s) détectée(s) sur le robot.`

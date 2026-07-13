@@ -10,7 +10,7 @@
 // adopting a canvas across windows is inconsistent across browser engines
 // (some reset its bitmap/2D context on the move). Instead this creates a
 // fresh <canvas> that belongs to the popup's own document from the start
-// and hands back its 2D context -- camera.js/camera2.js's existing render
+// and hands back its 2D context -- camera.js/cameraPip.js's existing render
 // loop just points its one decode+draw call at whichever context is
 // current, so nothing is duplicated or double-decoded either way.
 

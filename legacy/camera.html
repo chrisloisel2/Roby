@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+
+	<canvas id="canvas"></canvas>
+
+	<script>
+		const canvas = document.getElementById("canvas");
+		const ctx = canvas.getContext("2d");
+
+		const ws = new WebSocket("ws://169.254.222.31:8765");
+		ws.binaryType = "arraybuffer";
+
+		ws.onmessage = async (event) => {
+			const blob = new Blob([event.data], { type: "image/jpeg" });
+			const bitmap = await createImageBitmap(blob);
+
+			if (canvas.width !== bitmap.width) {
+				canvas.width = bitmap.width;
+				canvas.height = bitmap.height;
+			}
+
+			ctx.drawImage(bitmap, 0, 0);
+			bitmap.close();
+		};
+	</script>
+
+</body>
+
+</html>

@@ -220,7 +220,7 @@ export function initControl({ onFullscreen }) {
 				joy = joystick.poll();
 			} catch (err) {
 				console.error("[control] joystick.poll() failed", err);
-				joy = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false };
+				joy = { vx: 0, vy: 0, wz: 0, speed: null, deadman: false, mastUp: false, mastDown: false };
 			}
 			const browserControlEnabled = config.get("control.browserControl");
 			const activeDeadman = (deadman || joy.deadman) && browserControlEnabled;
@@ -247,10 +247,13 @@ export function initControl({ onFullscreen }) {
 			// firmware's 300ms VEL watchdog), plus exactly one more frame at
 			// mm_s:0 the instant it's released -- see the button wiring above
 			// for why this doesn't just resend 0 forever like the base does.
+			// Combines with the gamepad (joystick.js's btnMastUp/btnMastDown,
+			// see its "Détection auto mât") the same way the base's own
+			// vx/vy/wz already combine keyboard/d-pad with joy.vx/vy/wz above.
 			let mastMmS = 0;
 			if (activeDeadman) {
-				if (mast.up) mastMmS = MAST_SPEED_MM_S;
-				else if (mast.down) mastMmS = -MAST_SPEED_MM_S;
+				if (mast.up || joy.mastUp) mastMmS = MAST_SPEED_MM_S;
+				else if (mast.down || joy.mastDown) mastMmS = -MAST_SPEED_MM_S;
 			}
 			if (browserControlEnabled && (mastMmS !== 0 || mastMmSPrev !== 0)) {
 				ctrlSock.send({ type: "mast", action: "velocity", mm_s: mastMmS });
