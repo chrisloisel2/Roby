@@ -79,7 +79,7 @@ PORT = 8765
 # image detail -- lower it back via CAMERA_WIDTH/CAMERA_HEIGHT (or restore
 # 1280, 720 here) if latency regresses.
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 9999, 9999
-DEFAULT_JPEG_QUALITY = 40
+DEFAULT_JPEG_QUALITY = 100
 
 if __name__ == "__main__":
     exclude = os.environ.get("CAMERA_EXCLUDE", "")
