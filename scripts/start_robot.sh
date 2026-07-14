@@ -12,6 +12,16 @@
 #     NO_MAST=1     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh   # base + bras + caméras, pas de mât (ex: bridge Arduino du mât débranché)
 #     CAMERA_ONLY=1 scripts/start_robot.sh                              # caméras seules (pas d'OPERATOR_IP requis : camera_pub.py ne parle pas Zenoh)
 #
+# -record (CLI flag, not an env var like the ones above): also write every
+# discovered camera's feed to its own MP4 file, in addition to streaming it
+# as usual. Files land under recordings/<YYYYMMDD_HHMMSS>/ (one fresh
+# timestamped directory per run, created by camera_pub.py itself), named
+# cam<N>_<device-name>.mp4 -- see robot/camera_pub.py and
+# robot/uvc_camera_server.py's CAMERA_RECORD* env vars for tuning (fps,
+# output dir) or CAMERA_RECORD=1 to enable without going through this flag.
+#     OPERATOR_IP=192.168.15.111 scripts/start_robot.sh -record
+#     CAMERA_ONLY=1 scripts/start_robot.sh -record                      # enregistrement sans piloter la base/bras/mât
+#
 # camera_pub.py always runs regardless of these flags, same as before --
 # it now serves BOTH the front camera and an optional second UVC camera
 # over the SAME WebSocket connection/port (8765), not two separate
@@ -42,6 +52,19 @@
 # arm-only testing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+RECORD=0
+for arg in "$@"; do
+    case "$arg" in
+        -record | --record)
+            RECORD=1
+            ;;
+        *)
+            echo "start_robot.sh: option inconnue '$arg'" >&2
+            exit 1
+            ;;
+    esac
+done
 
 CAMERA_ONLY="${CAMERA_ONLY:-0}"
 NO_ARM="${NO_ARM:-0}"
@@ -161,7 +184,7 @@ stop_running "robot/camera_pub.py"
 stop_running "robot/arm_agent.py"
 stop_running "robot/mast_serial_bridge.py"
 
-echo "start_robot.sh: RUN_BASE=$RUN_BASE RUN_ARM=$RUN_ARM RUN_MAST=$RUN_MAST -- logs dans logs/*.log" >&2
+echo "start_robot.sh: RUN_BASE=$RUN_BASE RUN_ARM=$RUN_ARM RUN_MAST=$RUN_MAST RECORD=$RECORD -- logs dans logs/*.log" >&2
 
 # PIDs of whatever this run actually starts, so the EXIT trap and the final
 # wait only ever reference processes that exist -- no matter which subset of
@@ -217,7 +240,7 @@ fi
 # camera_pub.py doesn't use Zenoh/OPERATOR_IP: it serves video straight to
 # the browser over its own WebSocket server (ws://<robot-ip>:8765). Always
 # started -- it's the one component every mode (including CAMERA_ONLY) runs.
-"$PY" -u robot/camera_pub.py > "$CAMERA_LOG" 2>&1 &
+CAMERA_RECORD="$RECORD" "$PY" -u robot/camera_pub.py > "$CAMERA_LOG" 2>&1 &
 CAMERA_PID=$!
 PIDS+=("$CAMERA_PID")
 

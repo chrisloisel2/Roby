@@ -38,9 +38,22 @@ always shows what actually got negotiated per camera):
   CAMERA_MAX_INDEX     highest /dev/videoN index to probe (default 8).
   CAMERA_EXCLUDE       comma-separated /dev/videoN indices to never probe
         (e.g. a device on this box that opens+reads but is known-bad).
+
+Recording (off by default -- streaming alone already covers normal
+operation): set CAMERA_RECORD=1 (start_robot.sh's -record flag does this)
+to also write every discovered camera's feed to its own MP4 file, one per
+camera, under a fresh timestamped directory created at startup. See
+uvc_camera_server.py's CameraCapture for the actual VideoWriter setup.
+  CAMERA_RECORD        1 to enable recording, unset/0 to disable.
+  CAMERA_RECORD_DIR    parent directory recordings are timestamped under
+        (default "recordings").
+  CAMERA_RECORD_FPS    nominal FPS baked into each recorded file (default
+        15 -- see CameraCapture's record_fps docstring for why this isn't
+        measured live).
 """
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -70,11 +83,21 @@ DEFAULT_JPEG_QUALITY = 40
 
 if __name__ == "__main__":
     exclude = os.environ.get("CAMERA_EXCLUDE", "")
+
+    record_dir = None
+    if os.environ.get("CAMERA_RECORD", "0") == "1":
+        record_root = Path(os.environ.get("CAMERA_RECORD_DIR", "recordings"))
+        record_dir = record_root / time.strftime("%Y%m%d_%H%M%S")
+        record_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Recording enabled -- writing to {record_dir}", flush=True)
+
     manager = CameraManager(
         width=int(os.environ.get("CAMERA_WIDTH", DEFAULT_WIDTH)),
         height=int(os.environ.get("CAMERA_HEIGHT", DEFAULT_HEIGHT)),
         jpeg_quality=int(os.environ.get("CAMERA_JPEG_QUALITY", DEFAULT_JPEG_QUALITY)),
         max_probe_index=int(os.environ.get("CAMERA_MAX_INDEX", 8)),
         exclude_indices={int(x) for x in exclude.split(",") if x.strip()},
+        record_dir=record_dir,
+        record_fps=float(os.environ.get("CAMERA_RECORD_FPS", 15.0)),
     )
     MultiCameraServer(port=PORT, manager=manager).run()

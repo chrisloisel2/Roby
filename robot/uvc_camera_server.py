@@ -58,6 +58,7 @@ reachability, not the camera.
 import asyncio
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -123,6 +124,8 @@ class CameraCapture:
         jpeg_quality: int,
         lost_after_sec: float = 5.0,
         heartbeat_sec: float = 2.0,
+        record_dir: "Path | None" = None,
+        record_fps: float = 15.0,
     ):
         """
         cam_id        1-byte tag prefixed on every WebSocket message sent
@@ -136,6 +139,16 @@ class CameraCapture:
                       streaming fine -> treat as unplugged, set alive =
                       False so CameraManager reaps it (freeing this index
                       for rediscovery if replugged).
+        record_dir    if set, every frame this camera captures is also
+                      written to an MP4 file in this directory (in addition
+                      to being streamed) -- see _loop()'s VideoWriter setup.
+        record_fps    nominal FPS baked into the recorded file's container.
+                      Not measured live: cap.get(CAP_PROP_FPS) is unreliable
+                      on these cameras (module docstring), and the encode/
+                      send loop's real rate can vary under load -- a fixed
+                      nominal value keeps playback speed sane without extra
+                      bookkeeping. Override via CAMERA_RECORD_FPS if a
+                      camera's real sustained rate is known to differ.
         """
         self.cam_id = cam_id
         self.label = label
@@ -144,6 +157,8 @@ class CameraCapture:
         self.jpeg_quality = jpeg_quality
         self.lost_after_sec = lost_after_sec
         self.heartbeat_sec = heartbeat_sec
+        self.record_dir = record_dir
+        self.record_fps = record_fps
 
         self.latest_jpeg: bytes | None = None
         self.latest_id = 0
@@ -190,6 +205,26 @@ class CameraCapture:
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.height
 
+        writer = None
+        if self.record_dir is not None:
+            safe_label = re.sub(r"[^A-Za-z0-9_-]+", "_", self.label).strip("_") or f"cam{self.cam_id}"
+            record_path = self.record_dir / f"cam{self.cam_id}_{safe_label}.mp4"
+            # mp4v: no extra system codec packages needed beyond stock
+            # opencv-python, unlike H264 (openh264/ffmpeg-dependent). Frames
+            # are the already-decoded BGR frames from cap.read(), so this is
+            # a fresh encode independent of the camera's own MJPG hardware
+            # compression -- fine at this framerate/resolution, but it does
+            # add CPU work on top of the JPEG encode already done for
+            # streaming below.
+            writer = cv2.VideoWriter(
+                str(record_path), cv2.VideoWriter_fourcc(*"mp4v"), self.record_fps, (self.width, self.height)
+            )
+            if writer.isOpened():
+                self._log(f"recording to {record_path}")
+            else:
+                self._log(f"WARNING -- could not open VideoWriter for {record_path}, recording disabled for this camera")
+                writer = None
+
         frames_ok = frames_read_fail = frames_encode_fail = 0
         last_heartbeat = last_frame_ts = time.monotonic()
 
@@ -202,6 +237,9 @@ class CameraCapture:
                     frames_read_fail += 1
                     time.sleep(0.001)
                 else:
+                    if writer is not None:
+                        writer.write(frame)
+
                     ok, jpeg = cv2.imencode(
                         ".jpg",
                         frame,
@@ -243,6 +281,8 @@ class CameraCapture:
                     last_heartbeat = now
         finally:
             cap.release()
+            if writer is not None:
+                writer.release()
 
     def start(self) -> threading.Thread:
         thread = threading.Thread(target=self._loop, daemon=True)
@@ -265,6 +305,8 @@ class CameraManager:
         max_probe_index: int = 8,
         discover_every_sec: float = 3.0,
         exclude_indices: "set[int] | None" = None,
+        record_dir: "Path | None" = None,
+        record_fps: float = 15.0,
     ):
         self.width = width
         self.height = height
@@ -272,6 +314,8 @@ class CameraManager:
         self.max_probe_index = max_probe_index
         self.discover_every_sec = discover_every_sec
         self.exclude_indices = exclude_indices or set()
+        self.record_dir = record_dir
+        self.record_fps = record_fps
 
         self.cameras: dict[int, CameraCapture] = {}
         self._lock = threading.Lock()
@@ -301,6 +345,8 @@ class CameraManager:
                 width=self.width,
                 height=self.height,
                 jpeg_quality=self.jpeg_quality,
+                record_dir=self.record_dir,
+                record_fps=self.record_fps,
             )
             capture.name = name or f"Caméra {idx}"
             capture.start()
