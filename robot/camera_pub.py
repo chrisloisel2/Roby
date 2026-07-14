@@ -48,20 +48,24 @@ from uvc_camera_server import CameraManager, MultiCameraServer  # noqa: E402
 
 PORT = 8765
 
-# 1280x720, not 1920x1080: confirmed directly on this robot's cameras
-# (2026-07-11) that dropping to 720p does NOT unlock a higher framerate --
-# both resolutions deliver the exact same ~15fps ceiling in MJPG mode (a
-# fixed characteristic of this camera model, not a resolution/bandwidth
-# effect -- cap.get(CAP_PROP_FPS) always reports a nominal 30 regardless).
-# What 720p DOES do is cut each JPEG from ~77-120KB down to ~39-53KB, i.e.
-# combined bandwidth for two simultaneous streams sharing one WebSocket
-# drops from ~24 Mbps to ~11 Mbps -- real headroom against network
-# capacity, which is what was actually causing visible latency to build up
-# over a session (any dip below the combined requirement fills the send
-# buffer; see write_limit's comment in uvc_camera_server.py). Raise these
-# back via CAMERA_WIDTH/CAMERA_HEIGHT if your network can sustain more and
-# image detail matters more than smoothness for your use case.
-DEFAULT_WIDTH, DEFAULT_HEIGHT = 1280, 720
+# 9999x9999 is a deliberate V4L2/OpenCV trick, not a real target size:
+# requesting a width/height larger than any camera supports makes the
+# driver clamp to ITS OWN maximum mode instead of erroring out, so every
+# discovered camera streams at its native max resolution without needing
+# to know each model's actual ceiling up front (CameraCapture already reads
+# back whatever the driver actually negotiated, see its _loop()).
+#
+# 2026-07-11 note this REVERSES (max resolution on up to 3 simultaneous
+# cameras now, was 1280x720 on up to 2): that earlier 720p default existed
+# specifically because 1080p's larger JPEGs (~77-120KB vs ~39-53KB) were
+# filling the shared WebSocket's send buffer and building up real,
+# measured latency over a session (see write_limit's comment in
+# uvc_camera_server.py) -- framerate itself was NOT the reason (both
+# resolutions hit the same ~15fps MJPG ceiling on this camera model). That
+# bandwidth tradeoff hasn't gone away, it's just been deprioritized versus
+# image detail -- lower it back via CAMERA_WIDTH/CAMERA_HEIGHT (or restore
+# 1280, 720 here) if latency regresses.
+DEFAULT_WIDTH, DEFAULT_HEIGHT = 9999, 9999
 DEFAULT_JPEG_QUALITY = 40
 
 if __name__ == "__main__":
