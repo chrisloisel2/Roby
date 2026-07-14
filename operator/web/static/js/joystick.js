@@ -23,10 +23,10 @@ const JOY_ACTIONS = [
 
 // axisMastToggle (tableau `axes`, PAS `buttons`) renvoie une valeur brute qui
 // encode le sens -- mesurée sur la manette de l'opérateur : -1 = monter,
-// 0.14 = descendre. PAS symétrique (comportement brut du hat/bascule), donc
-// on matche chaque valeur cible avec une tolérance plutôt qu'un seuil unique.
+// 1 = descendre. Symétrique, matché avec une tolérance plutôt qu'un seuil
+// unique (comme le reste de la détection d'axes).
 const MAST_AXIS_UP_VALUE = -1;
-const MAST_AXIS_DOWN_VALUE = 0.14;
+const MAST_AXIS_DOWN_VALUE = 1;
 const MAST_AXIS_EPS = 0.1;
 
 // "Détection auto mât" (see wiring below): assigns btnMastUp/btnMastDown by

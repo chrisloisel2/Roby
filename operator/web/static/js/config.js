@@ -63,9 +63,8 @@ export const DEFAULTS = Object.freeze({
 			// du Gamepad API -- PAS `buttons`) dont la VALEUR BRUTE encode le
 			// sens -- voir joystick.js poll() / MAST_AXIS_UP_VALUE /
 			// MAST_AXIS_DOWN_VALUE. Défaut axe 9, mesuré sur la manette de
-			// l'opérateur : valeur -1 = monter, 0.14 = descendre (pas
-			// symétrique -- comportement brut du hat/bascule, pas une
-			// convention qu'on a choisie). -1 (ce champ-ci, l'INDEX) = désactivé.
+			// l'opérateur : valeur -1 = monter, 1 = descendre (symétrique).
+			// -1 (ce champ-ci, l'INDEX) = désactivé.
 			axisMastToggle: 9,
 		},
 	},
