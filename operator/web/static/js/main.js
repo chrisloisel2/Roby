@@ -13,6 +13,8 @@
 //                used by both camera.js and cameraPip.js
 //   armLink.js   ws://<robot-ip>:8767 (direct to robot/arm_agent.py) -> raw GELLO lines
 //   status.js    /ws/status -> tiles, banner, arm joint gauges
+//   birdview.js  vue spatiale (vue de dessus) : IPM WebGL des caméras avant/arrière
+//                + dead-reckoning depuis robot/state.vel -> overlay radar du panneau vidéo
 //   control.js   keyboard/d-pad/deadman + the command loop -> /ws/control (base/stop/reset/gripper)
 //   joystick.js  Gamepad API + dynamic mapping
 //   gello.js     GELLO leader arm over Web Serial -> armLink (raw lines, its own read-loop rate)
@@ -24,6 +26,7 @@ import { initCamera } from "./camera.js";
 import { initPipCamera } from "./cameraPip.js";
 import { resolvePrimaryId, resolveSecondaryId, resolveTertiaryId } from "./cameraRoles.js";
 import { createArmLink } from "./armLink.js";
+import { initBirdview } from "./birdview.js";
 import { initStatus, setTile } from "./status.js";
 import { initControl } from "./control.js";
 import { initJoystick } from "./joystick.js";
@@ -64,6 +67,7 @@ const joystick = initJoystick({
 initGello({ armLink });
 control.start({ joystick });
 initSettings({ mux: videoMux });
+initBirdview({ mux: videoMux, status, control });
 
 // ---- Connection badge (server link) ----
 setInterval(() => {

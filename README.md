@@ -54,7 +54,8 @@ operator/
     static/js/           modules ES : config (store central), net, videoMux
                          (connexion caméra partagée), camera, camera2,
                          armLink (WebSocket direct bras), status, control,
-                         joystick, gello, settings, main
+                         joystick, gello, settings, birdview (vue spatiale
+                         vue de dessus, voir § Vue spatiale), main
   gello_reader.py        lit le GELLO en série, relaie les lignes BRUTES (aucun calcul, voir plus bas)
   gello_calibration.json obsolète/sans usage -- la calibration se charge côté robot maintenant
 robot/
@@ -401,6 +402,51 @@ anciennes clés localStorage éparses (`roby.browserControl`,
 `roby.joystick.mapping.v1`, …) sont migrées automatiquement au premier
 chargement.
 
+### Vue spatiale (vue de dessus)
+
+Overlay « radar » en haut à droite du panneau vidéo (agrandissable ⤢ ou
+double-clic, masquable dans Réglages > Vue spatiale) : une représentation du
+robot et de son environnement **vue de dessus**, composée dans le navigateur
+à partir des flux existants — aucun capteur, process ou connexion en plus.
+Module `operator/web/static/js/birdview.js`, deux techniques classiques de
+la perception automobile :
+
+- **IPM (Inverse Perspective Mapping)** : chaque image des caméras avant et
+  arrière est reprojetée sur le plan du sol par un shader WebGL (projection
+  inverse par pixel, corrigée en perspective) — la technique des « surround
+  view » des voitures. La calibration (hauteur, inclinaison, FOV, déport de
+  montage de chaque caméra) se règle dans **Réglages (⚙) > Vue spatiale** :
+  c'est bon quand un carrelage/damier au sol reste droit et à la bonne
+  taille dans la vue.
+- **Dead-reckoning odométrique** : la pose (x, y, cap) est intégrée en
+  continu à partir des vitesses **réellement appliquées** par la base,
+  republiées par `robot_agent.py` dans `robot/state` (champ `vel` :
+  cinématique mecanum inverse des consignes roues post-rampe — pas l'écho
+  de la commande opérateur, qui ignorerait rampe/deadman/watchdog). Les
+  deux échelles (m/s et rad/s à pleine commande) se calibrent une fois en
+  chronométrant 1 m puis un tour sur place — la base est commandée en
+  normalisé `[-1, 1]`, jamais en unités physiques (rayon de roue jamais
+  mesuré fiablement, voir plus haut). Si le robot ne publie pas encore
+  `vel`, la vue se replie sur la dernière commande émise par ce navigateur
+  (badge « odom. navigateur » dans le HUD).
+
+Les projections sol successives s'accumulent dans une **mosaïque monde
+persistante** : l'environnement se peint autour du robot au fil du
+déplacement, avec la trace du chemin parcouru. Un **fondu temporel**
+réglable matérialise la confiance décroissante (l'odométrie dérive : une
+zone vue il y a longtemps n'est plus garantie exacte) ; le bouton ⌫ remet
+la mémoire et la pose à zéro. La caméra pince, non projetable au sol (elle
+vise la zone de travail), s'affiche en **médaillon circulaire** accroché à
+l'avant du glyphe robot. Le glyphe montre châssis + roues mecanum, flèche
+de cap, vecteur vitesse instantané et arc de rotation ; le HUD affiche
+x/y/cap et la hauteur du mât.
+
+Deux modes (🧭) : **cap** (robot fixe au centre, l'avant en haut — comme un
+GPS voiture) ou **carte** (nord en haut, panoramique à la souris, ⌖
+recentre). Molette = zoom, persisté. Quelles caméras jouent les rôles
+avant / arrière / pince se choisit dans Réglages > Vue spatiale (défaut :
+suivre les rôles principale / secondaire / tertiaire).
+
 ### Manette (Gamepad API)
 
 Le panneau **Manette**, en bas de la colonne de droite, est rétractable (cliquer
@@ -479,7 +525,7 @@ dépannage) : voir `firmware/mast/README.md`.
 | `robot/cmd/reset`            | ->   | lève le verrou E-stop + réactive les moteurs (deadman toujours requis pour bouger la base) — partagé base + bras |
 | `operator/deadman`           | ->   | `"true"` / `"false"` (base uniquement, pas le bras) |
 | `robot/heartbeat`            | <-   | vivacité robot base (~5 Hz)               |
-| `robot/state`                | <-   | `{moving, estop, deadman_ok, fresh_cmd, ts}` (base) |
+| `robot/state`                | <-   | `{moving, estop, deadman_ok, fresh_cmd, vel, ts}` (base) — `vel` = `{vx, vy, wz}` normalisés réellement appliqués (post-rampe, mecanum inverse), pour la vue spatiale |
 | `robot/arm/state`            | <-   | `{connected, moving, fresh_cmd, estop, joints, ts}` (bras) |
 | `robot/mast/cmd`             | ->   | commande JSON mât, ex. `{"action":"velocity","mm_s":30}` — voir `firmware/mast/README.md` |
 | `robot/mast/state`           | <-   | `{"position_mm","fdc_min","fdc_max","t"}` (mât, ~60 Hz) |

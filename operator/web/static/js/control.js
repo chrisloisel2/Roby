@@ -209,6 +209,10 @@ export function initControl({ onFullscreen }) {
 
 	// ---- Control loop, rate configurable (restarted when rateHz changes) ----
 	let loopTimer = 0;
+	// Dernière commande base réellement émise par CE navigateur (post
+	// deadman/vitesse) : source de repli du dead-reckoning de birdview.js
+	// quand robot/state ne publie pas encore "vel" (ancien robot_agent.py).
+	const lastCmd = { vx: 0, vy: 0, wz: 0 };
 	function start({ joystick }) {
 		const tick = () => {
 			// The base command send below is safety-relevant (the robot-side
@@ -233,6 +237,7 @@ export function initControl({ onFullscreen }) {
 			let vy = Math.max(-1, Math.min(1, (keys.right - keys.left) + joy.vy)) * speed;   // Q/E strafe
 			let wz = Math.max(-1, Math.min(1, (keys.rotR - keys.rotL) + joy.wz)) * speed;    // A/D rotate
 			if (!activeDeadman) { vx = vy = wz = 0; }
+			lastCmd.vx = vx; lastCmd.vy = vy; lastCmd.wz = wz;
 			setMeter(meters.vx, vx);
 			setMeter(meters.vy, vy);
 			setMeter(meters.wz, wz);
@@ -281,5 +286,6 @@ export function initControl({ onFullscreen }) {
 		sendReset,
 		setGripper,
 		adjustGripper: (d) => setGripper(gripper + d),
+		getLastCmd: () => lastCmd,
 	};
 }

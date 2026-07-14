@@ -170,6 +170,21 @@ def apply_base_command(vx: float, vy: float, wz: float) -> None:
     _drive(vx, vy, wz)
 
 
+def current_velocity() -> dict:
+    """Normalized base velocity ACTUALLY being applied right now (post-ramp),
+    recovered from the smoothed per-wheel targets by inverting the mecanum mix
+    of _mecanum_targets(). Published in robot/state ("vel") so the operator UI
+    can dead-reckon a top-down pose (operator/web/static/js/birdview.js)
+    without any new sensor or extra process -- commanded-vs-executed already
+    differ (ramp, deadman, watchdog), so echoing the operator's own command
+    back would drift much more than this does."""
+    w = [s * inv for s, inv in zip(_smoothed, INVERT)]  # un-INVERT -> raw mecanum wheel rad/s
+    tx = (w[0] + w[1] + w[2] + w[3]) / 4.0
+    ty = (-w[0] + w[1] - w[2] + w[3]) / 4.0
+    tz = (-w[0] + w[1] + w[2] - w[3]) / 4.0
+    return {"vx": tx / MAX_VEL, "vy": ty / MAX_VEL, "wz": tz / ROT_VEL}
+
+
 def apply_arm_command(_cmd: dict) -> None:
     pass  # Arm is driven by the separate arm_agent.py process -- see module docstring.
 
@@ -307,6 +322,7 @@ def main() -> None:
                             "estop": estop,
                             "deadman_ok": deadman_ok,
                             "fresh_cmd": fresh_cmd,
+                            "vel": current_velocity(),
                             "ts": now,
                         }))
 

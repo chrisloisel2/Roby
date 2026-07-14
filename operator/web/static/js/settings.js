@@ -34,13 +34,21 @@ export function initSettings({ mux } = {}) {
 		const primarySelect = $("camPrimarySelect");
 		const secondarySelect = $("camSecondarySelect");
 		const tertiarySelect = $("camTertiarySelect");
+		// Rôles spatiaux de la vue de dessus (birdview.js) : mêmes listes,
+		// mais leur "Auto" suit le rôle UI correspondant plutôt que le plus
+		// petit id (voir resolveRoleId dans birdview.js).
+		const bvSelects = [
+			[$("bvFrontSelect"), "birdview.frontId", "Auto (caméra principale)"],
+			[$("bvRearSelect"), "birdview.rearId", "Auto (caméra secondaire)"],
+			[$("bvGripperSelect"), "birdview.gripperId", "Auto (caméra tertiaire)"],
+		];
 		const hint = $("camListHint");
 		mux.onCameraList((cameras) => {
 			if (!primarySelect || !secondarySelect || !tertiarySelect) return;
-			const fillOptions = (select, includeNone) => {
+			const fillOptions = (select, includeNone, autoLabel = "Auto") => {
 				const current = select.value;
 				select.innerHTML = "";
-				select.add(new Option("Auto", "-1"));
+				select.add(new Option(autoLabel, "-1"));
 				if (includeNone) select.add(new Option("Aucune", "-2"));
 				for (const cam of cameras) {
 					select.add(new Option(`${cam.name} (id ${cam.id}, ${cam.width}x${cam.height})`, String(cam.id)));
@@ -50,6 +58,9 @@ export function initSettings({ mux } = {}) {
 			fillOptions(primarySelect, false);
 			fillOptions(secondarySelect, true);
 			fillOptions(tertiarySelect, true);
+			for (const [select, , autoLabel] of bvSelects) {
+				if (select) fillOptions(select, true, autoLabel);
+			}
 			// Re-apply the persisted config value now that matching
 			// <option>s exist (a plain fillOptions() above only preserves
 			// whatever was already visually selected, not the config on
@@ -57,6 +68,9 @@ export function initSettings({ mux } = {}) {
 			primarySelect.value = String(config.get("cameras.primaryId"));
 			secondarySelect.value = String(config.get("cameras.secondaryId"));
 			tertiarySelect.value = String(config.get("cameras.tertiaryId"));
+			for (const [select, path] of bvSelects) {
+				if (select) select.value = String(config.get(path));
+			}
 			if (hint) {
 				hint.textContent = cameras.length
 					? `${cameras.length} caméra(s) détectée(s) sur le robot.`

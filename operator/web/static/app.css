@@ -346,6 +346,92 @@ main {
 	text-align: center;
 }
 
+/* ---------- Vue spatiale (bird's eye view, birdview.js) ---------- */
+/* Overlay radar en haut à droite du panneau vidéo (sous le badge LIVE),
+   agrandissable (classe .big) sans voler d'espace de grille à la vidéo. */
+.spatial {
+	position: absolute;
+	top: 48px;
+	right: 12px;
+	width: 280px;
+	height: 280px;
+	border-radius: 12px;
+	overflow: hidden;
+	border: 1px solid var(--hairline-2);
+	background: #05070a;
+	box-shadow: 0 4px 16px #000a, inset 0 0 40px #0006;
+	z-index: 2;
+	transition: width .15s ease-out;
+}
+
+.spatial[hidden] {
+	display: none;
+}
+
+/* Agrandi : ancré haut/bas, mais s'arrête au-dessus de la rangée
+   .video-actions (bottom: 12px + 32px de bouton + 12px d'écart) pour ne
+   jamais recouvrir plein écran / ajustement / détacher. */
+.spatial.big {
+	width: min(58%, 720px);
+	height: auto;
+	bottom: 56px;
+}
+
+.spatial canvas {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	display: block;
+	touch-action: none;
+}
+
+.spatial .spatial-label {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	z-index: 2;
+	padding: 3px 8px;
+	font-size: 9.5px;
+	letter-spacing: .12em;
+	color: var(--muted);
+}
+
+.spatial-hud {
+	position: absolute;
+	left: 8px;
+	bottom: 8px;
+	z-index: 2;
+	padding: 3px 8px;
+	border-radius: 7px;
+	background: #000a;
+	backdrop-filter: blur(4px);
+	border: 1px solid var(--hairline-2);
+	font-size: 10.5px;
+	color: var(--ink-2);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	max-width: calc(100% - 130px);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.spatial-actions {
+	position: absolute;
+	right: 6px;
+	bottom: 8px;
+	z-index: 2;
+	display: flex;
+	gap: 5px;
+}
+
+.spatial-actions .icon-btn {
+	width: 24px;
+	height: 24px;
+	font-size: 12px;
+	border-radius: 7px;
+}
+
 .noSignal {
 	position: absolute;
 	inset: 0;
@@ -1399,6 +1485,15 @@ input[type=range] {
 
 	.video {
 		aspect-ratio: 4 / 3;
+	}
+
+	.spatial {
+		width: 180px;
+		height: 180px;
+	}
+
+	.spatial.big {
+		width: min(70%, 480px);
 	}
 
 	.side {

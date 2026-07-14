@@ -18,6 +18,7 @@ export function initStatus() {
 	const armJointsEl = document.getElementById("armJoints");
 
 	let robotState = {};
+	let lastSnapshot = {}; // dernier message /ws/status complet ({robot, state, arm, mast})
 	let prevEstop = null;
 
 	// Joint rows are created once per joint name then only updated — no
@@ -54,6 +55,7 @@ export function initStatus() {
 	const statusSock = createSocket("/ws/status", {
 		onMessage: (e) => {
 			const s = JSON.parse(e.data);
+			lastSnapshot = s;
 			robotState = s.state || {};
 			setTile("t-robot", s.robot ? "good" : "critical", s.robot ? "ACTIF" : "PERDU");
 			brandDot.style.background = s.robot ? "var(--good)" : "var(--critical)";
@@ -107,5 +109,11 @@ export function initStatus() {
 		if (path === "ui.showArmJoints" && !config.get("ui.showArmJoints")) armJointsEl.hidden = true;
 	});
 
-	return { isAlive: statusSock.isAlive, getRobotState: () => robotState };
+	return {
+		isAlive: statusSock.isAlive,
+		getRobotState: () => robotState,
+		// Snapshot /ws/status complet (dont s.robot, la vivacité heartbeat,
+		// et s.mast) -- consommé par birdview.js pour le dead-reckoning.
+		getSnapshot: () => lastSnapshot,
+	};
 }

@@ -110,6 +110,48 @@ export const DEFAULTS = Object.freeze({
 		showArmJoints: true,
 		staleMs: 1000,
 	},
+	birdview: {
+		// Vue spatiale (bird's eye view) : overlay radar dans le panneau
+		// vidéo -- voir birdview.js. Les projections sol (IPM) reposent sur
+		// une calibration hauteur / inclinaison / FOV par caméra, et le
+		// dead-reckoning sur les deux échelles de vitesse ci-dessous (la
+		// base est commandée en normalisé [-1, 1], jamais en m/s : le rayon
+		// de roue n'a jamais été mesuré fiablement, voir README) -- toutes
+		// réglables dans Réglages > Vue spatiale.
+		enabled: true,
+		northUp: false,     // false = cap en haut (robot fixe), true = carte fixe nord en haut
+		pxPerM: 46,          // zoom courant (molette), persisté sans passer par Réglages
+		// Quelle caméra découverte joue quel rôle spatial. -1 = auto (suit
+		// les rôles principale / secondaire / tertiaire existants,
+		// cameraRoles.js), -2 = aucune. Rotate180 = caméra montée à l'envers
+		// (même sémantique que cameras.*Rotate180, mais appliquée dans le
+		// shader IPM).
+		frontId: -1,
+		rearId: -1,
+		gripperId: -1,
+		frontRotate180: false,
+		rearRotate180: false,
+		showGripperInset: true,
+		// Échelles de dead-reckoning : vitesse réelle du robot à pleine
+		// commande (vx/vy = 1) et à pleine rotation (wz = 1). À calibrer une
+		// fois en chronométrant 1 m / un tour sur place.
+		speedFullMS: 0.6,
+		rotFullRadS: 1.6,
+		// Extrinsèques simplifiées de chaque caméra projetée au sol :
+		// hauteur du centre optique, inclinaison vers le bas depuis
+		// l'horizontale, champ horizontal, avance du point de montage par
+		// rapport au centre du châssis.
+		front: { heightM: 0.35, pitchDeg: 30, hfovDeg: 78, offsetM: 0.22 },
+		rear: { heightM: 0.35, pitchDeg: 35, hfovDeg: 78, offsetM: 0.20 },
+		// Fondu temporel de la mosaïque sol (s pour perdre la moitié de
+		// l'opacité). 0 = mémoire infinie. Le fondu matérialise la dérive de
+		// l'odométrie : une zone vue il y a longtemps n'est plus garantie
+		// exacte.
+		fadeHalflifeS: 45,
+		// Empreinte du châssis pour le glyphe robot (m).
+		robotLengthM: 0.52,
+		robotWidthM: 0.44,
+	},
 });
 
 function isPlainObject(v) {

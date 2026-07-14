@@ -46,6 +46,20 @@
 					<button class="icon-btn ghost" id="btnFullscreen" title="Plein écran (F)">⛶</button>
 				</div>
 				<div class="rec"><span class="dot"></span>LIVE</div>
+				<!-- Vue spatiale : vue de dessus robot + environnement (birdview.js).
+				     Overlay radar agrandissable, nourri par les mêmes flux caméra
+				     que les tuiles (mux partagé) + robot/state.vel pour la pose. -->
+				<div class="spatial" id="spatialView" hidden>
+					<canvas id="spatialCanvas" role="img" aria-label="Vue spatiale du robot vue de dessus"></canvas>
+					<span class="chip spatial-label">VUE SPATIALE</span>
+					<div class="spatial-hud" id="spatialHud">—</div>
+					<div class="spatial-actions">
+						<button class="icon-btn ghost" id="spatialMode" title="Basculer cap / carte">🧭</button>
+						<button class="icon-btn ghost" id="spatialCenter" title="Recentrer sur le robot">⌖</button>
+						<button class="icon-btn ghost" id="spatialClear" title="Effacer la mémoire spatiale">⌫</button>
+						<button class="icon-btn ghost" id="spatialExpand" title="Agrandir / réduire (double-clic)">⤢</button>
+					</div>
+				</div>
 				<div class="video-pip" id="videoPip">
 					<canvas id="cam2" role="img" aria-label="Flux caméra secondaire"></canvas>
 					<span class="chip pip-label"><span id="camName2">caméra secondaire</span></span>
@@ -246,6 +260,7 @@
 					<button data-tab="cameras">Caméras</button>
 						<button data-tab="joystick">Manette</button>
 					<button data-tab="gello">GELLO</button>
+					<button data-tab="birdview">Vue spatiale</button>
 					<button data-tab="ui">Interface</button>
 				</nav>
 				<div class="panes">
@@ -346,6 +361,111 @@
 						<div class="field">
 							<label class="check"><input type="checkbox" data-cfg="gello.autoConnect">
 								reconnexion automatique au chargement de la page (dernier port autorisé)</label>
+						</div>
+					</div>
+					<div class="pane" data-pane="birdview">
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="birdview.enabled">
+								activer la vue spatiale (overlay vue de dessus dans le panneau vidéo)</label>
+							<small>projection des caméras avant/arrière sur le plan du sol (IPM, la
+								technique des « surround view » automobiles) + pose intégrée depuis les
+								vitesses réellement appliquées par la base (<span class="kbd">robot/state
+								· vel</span>). L'environnement se peint autour du robot au fil du
+								déplacement.</small>
+						</div>
+						<div class="field">
+							<label>Caméra avant (projetée au sol)</label>
+							<select id="bvFrontSelect" data-cfg="birdview.frontId" data-type="int"></select>
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="birdview.frontRotate180">
+								caméra avant montée à l'envers (180°)</label>
+						</div>
+						<div class="field">
+							<label>Caméra arrière (projetée au sol)</label>
+							<select id="bvRearSelect" data-cfg="birdview.rearId" data-type="int"></select>
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="birdview.rearRotate180">
+								caméra arrière montée à l'envers (180°)</label>
+						</div>
+						<div class="field">
+							<label>Caméra pince (médaillon)</label>
+							<select id="bvGripperSelect" data-cfg="birdview.gripperId" data-type="int"></select>
+						</div>
+						<div class="field">
+							<label class="check"><input type="checkbox" data-cfg="birdview.showGripperInset">
+								afficher le médaillon pince accroché au glyphe robot</label>
+						</div>
+						<div class="field">
+							<label>Vitesse réelle à pleine commande <b data-out="birdview.speedFullMS">0.60 m/s</b></label>
+							<input type="range" data-cfg="birdview.speedFullMS" data-fixed="2" data-unit=" m/s"
+								min="0.1" max="2" step="0.05">
+							<small>échelle du dead-reckoning : à calibrer une fois en chronométrant le
+								robot sur 1 m à vitesse max (la base est commandée en normalisé, jamais
+								en m/s — le rayon de roue n'a pas de mesure fiable).</small>
+						</div>
+						<div class="field">
+							<label>Rotation réelle à pleine commande <b data-out="birdview.rotFullRadS">1.6 rad/s</b></label>
+							<input type="range" data-cfg="birdview.rotFullRadS" data-fixed="1" data-unit=" rad/s"
+								min="0.2" max="4" step="0.1">
+							<small>même calibration pour le cap : chronométrer un tour sur place
+								(1 tour = 6,28 rad).</small>
+						</div>
+						<div class="field">
+							<label>Caméra avant — hauteur <b data-out="birdview.front.heightM">0.35 m</b></label>
+							<input type="range" data-cfg="birdview.front.heightM" data-fixed="2" data-unit=" m"
+								min="0.05" max="2" step="0.01">
+						</div>
+						<div class="field">
+							<label>Caméra avant — inclinaison vers le bas <b data-out="birdview.front.pitchDeg">30°</b></label>
+							<input type="range" data-cfg="birdview.front.pitchDeg" data-unit="°" min="5" max="85" step="1">
+						</div>
+						<div class="field">
+							<label>Caméra avant — champ horizontal <b data-out="birdview.front.hfovDeg">78°</b></label>
+							<input type="range" data-cfg="birdview.front.hfovDeg" data-unit="°" min="40" max="120" step="1">
+						</div>
+						<div class="field">
+							<label>Caméra avant — avance du montage <b data-out="birdview.front.offsetM">0.22 m</b></label>
+							<input type="range" data-cfg="birdview.front.offsetM" data-fixed="2" data-unit=" m"
+								min="0" max="0.6" step="0.01">
+							<small>la projection sol est juste quand le damier/carrelage reste droit et
+								à la bonne taille dans la vue : ajuster hauteur puis inclinaison jusqu'à
+								ce que ce soit le cas.</small>
+						</div>
+						<div class="field">
+							<label>Caméra arrière — hauteur <b data-out="birdview.rear.heightM">0.35 m</b></label>
+							<input type="range" data-cfg="birdview.rear.heightM" data-fixed="2" data-unit=" m"
+								min="0.05" max="2" step="0.01">
+						</div>
+						<div class="field">
+							<label>Caméra arrière — inclinaison vers le bas <b data-out="birdview.rear.pitchDeg">35°</b></label>
+							<input type="range" data-cfg="birdview.rear.pitchDeg" data-unit="°" min="5" max="85" step="1">
+						</div>
+						<div class="field">
+							<label>Caméra arrière — champ horizontal <b data-out="birdview.rear.hfovDeg">78°</b></label>
+							<input type="range" data-cfg="birdview.rear.hfovDeg" data-unit="°" min="40" max="120" step="1">
+						</div>
+						<div class="field">
+							<label>Caméra arrière — recul du montage <b data-out="birdview.rear.offsetM">0.20 m</b></label>
+							<input type="range" data-cfg="birdview.rear.offsetM" data-fixed="2" data-unit=" m"
+								min="0" max="0.6" step="0.01">
+						</div>
+						<div class="field">
+							<label>Mémoire du sol — demi-vie <b data-out="birdview.fadeHalflifeS">45 s</b></label>
+							<input type="range" data-cfg="birdview.fadeHalflifeS" data-unit=" s" min="0" max="120" step="5">
+							<small>l'odométrie dérive : le fondu matérialise la confiance décroissante
+								des zones vues il y a longtemps. 0 = mémoire infinie.</small>
+						</div>
+						<div class="field">
+							<label>Empreinte robot — longueur <b data-out="birdview.robotLengthM">0.52 m</b></label>
+							<input type="range" data-cfg="birdview.robotLengthM" data-fixed="2" data-unit=" m"
+								min="0.2" max="1.2" step="0.01">
+						</div>
+						<div class="field">
+							<label>Empreinte robot — largeur <b data-out="birdview.robotWidthM">0.44 m</b></label>
+							<input type="range" data-cfg="birdview.robotWidthM" data-fixed="2" data-unit=" m"
+								min="0.2" max="1.2" step="0.01">
 						</div>
 					</div>
 					<div class="pane" data-pane="ui">
